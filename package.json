@@ -1,0 +1,41 @@
+{
+  "name": "boardroom-booking-server",
+  "version": "1.0.0",
+  "description": "Boardroom booking system backend (Express + Mongo + Google Calendar)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "nodemon index.js",
+    "start": "node index.js",
+    "seed:admin": "node scripts/seedAdmin.js"
+  },
+  "keywords": [
+    "boardroom",
+    "booking",
+    "calendar",
+    "express",
+    "mongodb"
+  ],
+  "author": "salat",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "googleapis": "^171.2.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.5.3",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^6.9.14",
+    "pdfkit": "^0.17.2",
+    "twilio": "^5.12.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
