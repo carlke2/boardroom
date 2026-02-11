@@ -12,14 +12,14 @@ async function writeLog({
     const actorId = req?.user?._id || req?.user?.id || null;
     const actorEmail = req?.user?.email || null;
 
-    //  Proper IP detection (works local + production + proxies)
+    // ✅ Proper IP detection (works local + production + proxies)
     const ip =
       req.headers["x-forwarded-for"]?.split(",")[0] ||
       req.socket?.remoteAddress ||
       req.ip ||
       null;
 
-    //  Proper user agent
+    // ✅ Proper user agent
     const userAgent = req.headers["user-agent"] || null;
 
     await ActivityLog.create({
