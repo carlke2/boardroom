@@ -1,9 +1,11 @@
 const router = require("express").Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { google } = require("googleapis");
 
 const User = require("../models/User");
 const { authRequired } = require("../middleware/auth");
+const { CONST } = require("../config/constants");
 
 /**
  * Safe async wrapper
@@ -11,13 +13,12 @@ const { authRequired } = require("../middleware/auth");
 const asyncHandler = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
 
+/* =========================================================
+   AUTH ROUTES
+========================================================= */
+
 /**
  * POST /auth/register
- * body: { name, email, phone, password, role? }
- *
- * NOTE: Your User schema requires:
- * - phone (required)
- * - passwordHash (required)
  */
 router.post(
   "/register",
@@ -32,7 +33,7 @@ router.post(
     }
 
     const normalizedEmail = String(email).trim().toLowerCase();
-    const normalizedPhone = String(phone).trim(); // keep as user provides (+254...)
+    const normalizedPhone = String(phone).trim();
 
     const existsEmail = await User.findOne({ email: normalizedEmail });
     if (existsEmail) {
@@ -46,7 +47,6 @@ router.post(
 
     const passwordHash = await bcrypt.hash(String(password), 10);
 
-    // Default USER unless explicitly set to ADMIN (you can lock this down later)
     const safeRole = role === "ADMIN" ? "ADMIN" : "USER";
 
     const user = await User.create({
@@ -72,7 +72,6 @@ router.post(
 
 /**
  * POST /auth/login
- * body: { email, password }
  */
 router.post(
   "/login",
@@ -90,12 +89,7 @@ router.post(
       return res.status(401).json({ ok: false, message: "Invalid credentials" });
     }
 
-    const hash = user.passwordHash;
-    if (!hash) {
-      return res.status(500).json({ ok: false, message: "User passwordHash missing in DB" });
-    }
-
-    const match = await bcrypt.compare(String(password), hash);
+    const match = await bcrypt.compare(String(password), user.passwordHash);
     if (!match) {
       return res.status(401).json({ ok: false, message: "Invalid credentials" });
     }
@@ -128,6 +122,56 @@ router.get(
   authRequired,
   asyncHandler(async (req, res) => {
     return res.json({ ok: true, user: req.user });
+  })
+);
+
+/* =========================================================
+   GOOGLE CALENDAR OAUTH (RENDER PRODUCTION READY)
+========================================================= */
+
+/**
+ * GET /auth/google/connect
+ * Opens Google consent screen
+ */
+router.get("/google/connect", (req, res) => {
+  const client = new google.auth.OAuth2(
+    CONST.GOOGLE.CLIENT_ID,
+    CONST.GOOGLE.CLIENT_SECRET,
+    CONST.GOOGLE.REDIRECT_URI
+  );
+
+  const url = client.generateAuthUrl({
+    access_type: "offline",
+    prompt: "consent",
+    scope: ["https://www.googleapis.com/auth/calendar"]
+  });
+
+  return res.redirect(url);
+});
+
+/**
+ * GET /auth/oauth2callback
+ * Returns refresh token JSON
+ */
+router.get(
+  "/oauth2callback",
+  asyncHandler(async (req, res) => {
+    const code = req.query.code;
+    if (!code) return res.status(400).send("Missing ?code");
+
+    const client = new google.auth.OAuth2(
+      CONST.GOOGLE.CLIENT_ID,
+      CONST.GOOGLE.CLIENT_SECRET,
+      CONST.GOOGLE.REDIRECT_URI
+    );
+
+    const { tokens } = await client.getToken(code);
+
+    return res.json({
+      ok: true,
+      message: "Copy this refresh_token into Render env",
+      refresh_token: tokens.refresh_token || null
+    });
   })
 );
 
