@@ -11,7 +11,7 @@ const reminderRoutes = require("./routes/reminders.routes");
 const publicRoutes = require("./routes/public.routes");
 const roomRoutes = require("./routes/rooms.routes");
 const passwordResetRoutes = require("./routes/passwordReset.routes.js");
-const adminRoutes = require("./routes/admin.routes"); // ✅ add
+const adminRoutes = require("./routes/admin.routes"); 
 
 const { startReminderCron } = require("./jobs/reminderCron");
 
