@@ -19,19 +19,36 @@ const { sendSms } = require("../services/notify/sms");
 const {
   buildBookingSubject,
   buildBookingEmailHtml,
-  buildBookingEmailText
+  buildBookingEmailText,
 } = require("../services/notify/templates");
 
 const router = express.Router();
+
+/**
+ * Helpers
+ */
+function isYYYYMMDD(s) {
+  return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
 
 // Timeline
 router.get("/day", authRequired, async (req, res) => {
   try {
     const date = req.query.date;
-    if (!date) return res.status(400).json({ ok: false, message: "date=YYYY-MM-DD required" });
+
+    if (!date) {
+      return res.status(400).json({ ok: false, message: "date=YYYY-MM-DD required" });
+    }
+
+    // ✅ Prevent UI sending 02/12/2026 etc.
+    if (!isYYYYMMDD(date)) {
+      return res.status(400).json({ ok: false, message: "date must be YYYY-MM-DD" });
+    }
 
     const { start, end } = dayRangeUTC(date);
+
     const events = await listEvents(start.toISOString(), end.toISOString());
+
     const { freeSlots, freeGaps, workStart, workEnd } = computeFreeSlots(date, events);
 
     return res.json({
@@ -40,10 +57,18 @@ router.get("/day", authRequired, async (req, res) => {
       workWindow: { startAt: workStart, endAt: workEnd },
       booked: events,
       freeSlots,
-      freeGaps
+      freeGaps,
     });
   } catch (e) {
-    return res.status(500).json({ ok: false, message: e.message });
+    // ✅ crucial logging to Render logs
+    console.error("[/api/day] ERROR", {
+      message: e?.message,
+      stack: e?.stack,
+      googleStatus: e?.response?.status,
+      googleData: e?.response?.data,
+    });
+
+    return res.status(500).json({ ok: false, message: e?.message || "Internal Server Error" });
   }
 });
 
@@ -57,14 +82,14 @@ router.post("/bookings", authRequired, async (req, res) => {
       meetingTitle,
       startAt,
       durationMinutes,
-      meetingLink
+      meetingLink,
     } = req.body || {};
 
     // attendeeCount required
     if (!teamName || !startAt || !durationMinutes || attendeeCount == null) {
       return res.status(400).json({
         ok: false,
-        message: "teamName, startAt, durationMinutes, attendeeCount required"
+        message: "teamName, startAt, durationMinutes, attendeeCount required",
       });
     }
 
@@ -94,8 +119,7 @@ router.post("/bookings", authRequired, async (req, res) => {
 
     const newEnd = new Date(newStart.getTime() + dur * 60 * 1000);
 
-    // ✅ NEW: block booking in the past or too soon (buffer)
-    // Rule: earliest allowed start = now + BUFFER_MINUTES
+    // block booking in the past or too soon (buffer)
     const bufferMin = Number(CONST.BUFFER_MINUTES || 0);
     const now = new Date();
     const minStartAllowed = new Date(now.getTime() + Math.max(0, bufferMin) * 60 * 1000);
@@ -105,7 +129,7 @@ router.post("/bookings", authRequired, async (req, res) => {
         ok: false,
         message: `Start time must be at least ${Math.max(0, bufferMin)} minute(s) from now.`,
         now: now.toISOString(),
-        minStartAllowed: minStartAllowed.toISOString()
+        minStartAllowed: minStartAllowed.toISOString(),
       });
     }
 
@@ -118,14 +142,14 @@ router.post("/bookings", authRequired, async (req, res) => {
       newStart,
       newEnd,
       existingEvents: existing,
-      bufferMinutes: bufferMin
+      bufferMinutes: bufferMin,
     });
 
     if (conflict) {
       return res.status(409).json({
         ok: false,
         message: `Clash with: "${conflict.title}"`,
-        conflict
+        conflict,
       });
     }
 
@@ -137,7 +161,7 @@ router.post("/bookings", authRequired, async (req, res) => {
       title: eventTitle,
       startAtISO: newStart.toISOString(),
       endAtISO: newEnd.toISOString(),
-      meetingLink: meetingLink || null
+      meetingLink: meetingLink || null,
     });
 
     const booking = await Booking.create({
@@ -151,7 +175,7 @@ router.post("/bookings", authRequired, async (req, res) => {
       endAt: newEnd,
       meetingLink: meetingLink || null,
       googleEventId,
-      status: "CONFIRMED"
+      status: "CONFIRMED",
     });
 
     // Activity log
@@ -161,14 +185,14 @@ router.post("/bookings", authRequired, async (req, res) => {
       description: `Booking created: ${booking.teamName} (${headcount} people) | ${newStart.toISOString()} - ${newEnd.toISOString()}`,
       entityType: "BOOKING",
       entityId: booking._id,
-      meta: { roomId: booking.roomId || null, attendeeCount: headcount }
+      meta: { roomId: booking.roomId || null, attendeeCount: headcount },
     });
 
     await createRemindersForBooking({
       userId: req.user.id,
       bookingId: booking._id,
       startAt: newStart,
-      endAt: newEnd
+      endAt: newEnd,
     });
 
     // Email + SMS confirmation (best effort)
@@ -180,14 +204,14 @@ router.post("/bookings", authRequired, async (req, res) => {
           to: user.email,
           subject: buildBookingSubject(booking),
           html: buildBookingEmailHtml({ user, booking }),
-          text: buildBookingEmailText({ user, booking })
+          text: buildBookingEmailText({ user, booking }),
         });
       }
 
       if (user?.phone) {
         await sendSms({
           to: user.phone,
-          message: `Booking confirmed: ${booking.teamName} (${headcount} people).`
+          message: `Booking confirmed: ${booking.teamName} (${headcount} people).`,
         });
       }
     } catch (notifyErr) {
@@ -196,7 +220,8 @@ router.post("/bookings", authRequired, async (req, res) => {
 
     return res.json({ ok: true, booking });
   } catch (e) {
-    return res.status(500).json({ ok: false, message: e.message });
+    console.error("[/api/bookings] ERROR", e?.message || e);
+    return res.status(500).json({ ok: false, message: e?.message || "Internal Server Error" });
   }
 });
 
@@ -240,12 +265,12 @@ router.delete("/bookings/:id", authRequired, async (req, res) => {
     await writeLog({
       req,
       action: "BOOKING_CANCELLED",
-      description: `Booking cancelled: ${booking.teamName || "team"} (${booking.attendeeCount || "?"} people) | ${new Date(
-        booking.startAt
-      ).toISOString()} - ${new Date(booking.endAt).toISOString()}`,
+      description: `Booking cancelled: ${booking.teamName || "team"} (${
+        booking.attendeeCount || "?"
+      } people) | ${new Date(booking.startAt).toISOString()} - ${new Date(booking.endAt).toISOString()}`,
       entityType: "BOOKING",
       entityId: booking._id,
-      meta: { roomId: booking.roomId || null, attendeeCount: booking.attendeeCount || null }
+      meta: { roomId: booking.roomId || null, attendeeCount: booking.attendeeCount || null },
     });
 
     if (isAdmin) {
