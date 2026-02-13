@@ -40,32 +40,37 @@ function startReminderCron() {
             User.findById(r.userId),
           ]);
 
-          const who = user
-            ? `${user.name || "user"} (${user.email || "no-email"}, ${user.phone || "no-phone"})`
-            : "unknown user";
+          // ✅ NEW: if booking missing, fail reminder and continue (prevents infinite retries)
+          if (!booking) {
+            await markReminderFailed(r._id, { error: "BOOKING_NOT_FOUND" });
+            console.warn(`[REMINDER] Failed reminderId=${r._id} reason=BOOKING_NOT_FOUND`);
+            continue;
+          }
 
-          const details = booking
-            ? `${booking.teamName || "team"}${booking.meetingTitle ? " — " + booking.meetingTitle : ""} | ${
-                booking.startAt ? new Date(booking.startAt).toISOString() : "no-start"
-              } - ${booking.endAt ? new Date(booking.endAt).toISOString() : "no-end"}`
-            : "booking missing";
+          // ✅ NEW: if user missing, fail reminder and continue
+          if (!user) {
+            await markReminderFailed(r._id, { error: "USER_NOT_FOUND" });
+            console.warn(`[REMINDER] Failed reminderId=${r._id} reason=USER_NOT_FOUND`);
+            continue;
+          }
+
+          const who = `${user.name || "user"} (${user.email || "no-email"}, ${user.phone || "no-phone"})`;
+
+          const details = `${booking.teamName || "team"}${
+            booking.meetingTitle ? " — " + booking.meetingTitle : ""
+          } | ${booking.startAt ? new Date(booking.startAt).toISOString() : "no-start"} - ${
+            booking.endAt ? new Date(booking.endAt).toISOString() : "no-end"
+          }`;
 
           console.log(`[REMINDER] ${r.type} | ${who} | ${details}`);
 
           try {
-            // Decide delivery channels. Keep your existing reminder types.
-            // If your DB reminders already have channel info, switch to that.
-            const sendEmail = !!user?.email;
-            const sendSms = !!user?.phone;
+            const sendEmail = !!user.email;
+            const sendSms = !!user.phone;
 
             let emailRes = { ok: true };
             let smsRes = { ok: true };
 
-            // Example behavior:
-            // - STARTS_20 => email + sms
-            // - JOIN_NOW  => email only (or both; your choice)
-            // - ENDING_10 => sms only (or both; your choice)
-            // Keep this mapping aligned with your existing backend logic.
             if (r.type === "STARTS_20") {
               if (sendEmail) emailRes = await sendReminderEmail({ reminder: r, booking, user });
               if (sendSms) smsRes = await sendReminderSms({ reminder: r, booking, user });
@@ -80,7 +85,6 @@ function startReminderCron() {
                 emailRes = await sendReminderEmail({ reminder: r, booking, user });
               }
             } else {
-              // default: try both if available
               if (sendEmail) emailRes = await sendReminderEmail({ reminder: r, booking, user });
               if (sendSms) smsRes = await sendReminderSms({ reminder: r, booking, user });
             }
@@ -92,13 +96,15 @@ function startReminderCron() {
                 emailMessageId: emailRes?.providerMessageId || null,
                 smsMessageId: smsRes?.providerMessageId || null,
               });
-              console.log(`[REMINDER] Sent  reminderId=${r._id}`);
+              console.log(`[REMINDER] Sent reminderId=${r._id}`);
             } else {
               await markReminderFailed(r._id, {
                 error: emailRes?.error || smsRes?.error || "Send failed",
               });
               console.warn(
-                `[REMINDER] Failed  reminderId=${r._id} reason=${emailRes?.error || smsRes?.error || "unknown"}`
+                `[REMINDER] Failed reminderId=${r._id} reason=${
+                  emailRes?.error || smsRes?.error || "unknown"
+                }`
               );
             }
           } catch (sendErr) {
@@ -117,7 +123,7 @@ function startReminderCron() {
     { timezone: tz }
   );
 
-  console.log(` Reminder cron started (${schedule}) TZ=${tz}`);
+  console.log(`Reminder cron started (${schedule}) TZ=${tz}`);
 }
 
 module.exports = { startReminderCron };
