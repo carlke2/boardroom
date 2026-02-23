@@ -1,4 +1,4 @@
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 
 function requireEnv(name) {
   const v = process.env[name];
@@ -11,54 +11,60 @@ function normalizeEmailList(value) {
   const arr = Array.isArray(value) ? value : [value];
   return arr
     .flatMap((x) => String(x).split(","))
-    .map((s) => s.trim().toLowerCase())
+    .map((s) => s.trim())
     .filter(Boolean);
 }
 
-let cachedTransporter = null;
-
-function getTransporter() {
-  if (cachedTransporter) return cachedTransporter;
-
-  const host = process.env.SMTP_HOST || "smtp.gmail.com";
-  const port = Number(process.env.SMTP_PORT || 587);
-
-  const user = requireEnv("SMTP_USER");
-  const pass = requireEnv("SMTP_PASS");
-
-  cachedTransporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-
-    // production hardening (safe defaults)
-    pool: true,
-    maxConnections: Number(process.env.SMTP_MAX_CONNECTIONS || 3),
-    maxMessages: Number(process.env.SMTP_MAX_MESSAGES || 100),
-
-    connectionTimeout: Number(process.env.SMTP_CONN_TIMEOUT_MS || 20_000),
-    greetingTimeout: Number(process.env.SMTP_GREET_TIMEOUT_MS || 20_000),
-    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 30_000),
-  });
-
-  return cachedTransporter;
+// Resend client (cached)
+let cachedResend = null;
+function getResend() {
+  if (cachedResend) return cachedResend;
+  cachedResend = new Resend(requireEnv("RESEND_API_KEY"));
+  return cachedResend;
 }
 
+/**
+ * buildFrom
+ * Priority:
+ * 1) MAIL_FROM (recommended) -> "Name <email@domain.com>"
+ * 2) MAIL_FROM_EMAIL/MAIL_FROM_NAME (compat)
+ * 3) fallback to onboarding@resend.dev (safe default)
+ */
 function buildFrom() {
-  const fromEmail = process.env.MAIL_FROM_EMAIL || process.env.EMAIL_FROM || process.env.SMTP_USER;
-  const fromName = process.env.MAIL_FROM_NAME || process.env.APP_NAME || "Boardroom Booking";
-  // Nodemailer supports: "Name <email@domain.com>"
+  const mailFrom = process.env.MAIL_FROM;
+  if (mailFrom) return mailFrom;
+
+  const fromEmail =
+    process.env.MAIL_FROM_EMAIL ||
+    process.env.EMAIL_FROM ||
+    "onboarding@resend.dev";
+
+  const fromName =
+    process.env.MAIL_FROM_NAME ||
+    process.env.APP_NAME ||
+    "Boardroom Booking";
+
   return `${fromName} <${fromEmail}>`;
 }
 
 /**
- * sendEmail
+ * sendEmail (Resend)
  * - supports to/cc/bcc as string | string[]
- * - supports attachments (for ICS later)
+ * - supports attachments (base64) e.g. ICS later
+ * NOTE: Resend attachments require { filename, content, contentType }
+ * where content is base64 (no data: prefix).
  */
-async function sendEmail({ to, cc, bcc, subject, html, text, attachments, replyTo }) {
-  const transporter = getTransporter();
+async function sendEmail({
+  to,
+  cc,
+  bcc,
+  subject,
+  html,
+  text,
+  attachments,
+  replyTo,
+}) {
+  const resend = getResend();
 
   const toList = normalizeEmailList(to);
   const ccList = normalizeEmailList(cc);
@@ -68,31 +74,50 @@ async function sendEmail({ to, cc, bcc, subject, html, text, attachments, replyT
     throw new Error("sendEmail: missing recipients (to/cc/bcc)");
   }
 
-  try {
-    const info = await transporter.sendMail({
-      from: buildFrom(),
-      to: toList.length ? toList : undefined,
-      cc: ccList.length ? ccList : undefined,
-      bcc: bccList.length ? bccList : undefined,
-      replyTo: replyTo || undefined,
-      subject,
-      text,
-      html,
-      attachments: Array.isArray(attachments) ? attachments : undefined,
-    });
+  // Resend supports either html or text; we’ll pass both when available.
+  const payload = {
+    from: buildFrom(),
+    to: toList.length ? toList : undefined,
+    cc: ccList.length ? ccList : undefined,
+    bcc: bccList.length ? bccList : undefined,
+    subject,
+    html: html || undefined,
+    text: text || undefined,
+    reply_to: replyTo || process.env.MAIL_REPLY_TO || undefined,
+    attachments: Array.isArray(attachments)
+      ? attachments.map((a) => ({
+          filename: a.filename || a.name || "attachment",
+          content: a.content, // MUST be base64 string
+          contentType: a.contentType || a.content_type || a.mimetype,
+        }))
+      : undefined,
+  };
 
-    console.log("EMAIL SENT", {
+  try {
+    const { data, error } = await resend.emails.send(payload);
+
+    if (error) {
+      console.error("EMAIL FAILED (RESEND)", {
+        to: toList,
+        cc: ccList,
+        bcc: bccList,
+        subject,
+        error,
+      });
+      return { ok: false, error: error.message || "Email send failed" };
+    }
+
+    console.log("EMAIL SENT (RESEND)", {
       to: toList,
       cc: ccList,
       bcc: bccList,
       subject,
-      messageId: info.messageId,
-      response: info.response,
+      providerMessageId: data?.id,
     });
 
-    return { ok: true, providerMessageId: info.messageId, response: info.response };
+    return { ok: true, providerMessageId: data?.id };
   } catch (err) {
-    console.error("EMAIL FAILED", {
+    console.error("EMAIL FAILED (RESEND)", {
       to: toList,
       cc: ccList,
       bcc: bccList,
