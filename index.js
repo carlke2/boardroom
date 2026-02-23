@@ -12,6 +12,8 @@ const publicRoutes = require("./routes/public.routes");
 const roomRoutes = require("./routes/rooms.routes");
 const passwordResetRoutes = require("./routes/passwordReset.routes.js");
 const adminRoutes = require("./routes/admin.routes"); 
+const googleAuthRoutes = require("./routes/googleAuth.routes");
+
 
 const { startReminderCron } = require("./jobs/reminderCron");
 
@@ -39,6 +41,8 @@ app.use("/api", reminderRoutes);
 app.use("/api", roomRoutes);
 app.use("/api", adminRoutes); //  mount admin endpoints under /api
 app.use("/public", publicRoutes);
+app.use("/auth", googleAuthRoutes);
+
 
 const PORT = process.env.PORT || 5000;
 

@@ -1,12 +1,34 @@
 // services/reminders.js
 const Reminder = require("../models/Reminder");
 
-// Keep your existing helpers
+const { sendEmail } = require("./notify/email");
+const {
+  buildReminderEmailSubject,
+  buildReminderEmailHtml,
+  buildReminderEmailText,
+} = require("./notify/templates");
+
+function uniqEmails(list) {
+  if (!list) return [];
+  const arr = Array.isArray(list) ? list : [list];
+  const out = [];
+  const seen = new Set();
+  for (const item of arr) {
+    if (!item) continue;
+    const email = String(item).trim().toLowerCase();
+    if (!email) continue;
+    if (!seen.has(email)) {
+      seen.add(email);
+      out.push(email);
+    }
+  }
+  return out;
+}
+
 function makeReminderTimes(startAt, endAt) {
+  // ✅ YOUR REQUIREMENT: 20 minutes before they EXIT (endAt)
   return [
-    { type: "STARTS_20", scheduledAt: new Date(startAt.getTime() - 20 * 60 * 1000) },
-    { type: "JOIN_NOW", scheduledAt: new Date(startAt.getTime()) },
-    { type: "ENDING_10", scheduledAt: new Date(endAt.getTime() - 10 * 60 * 1000) },
+    { type: "ENDING_20", scheduledAt: new Date(endAt.getTime() - 20 * 60 * 1000) },
   ];
 }
 
@@ -25,7 +47,6 @@ async function fetchDueReminders(now = new Date()) {
   return Reminder.find({ status: "PENDING", scheduledAt: { $lte: now } }).limit(50);
 }
 
-// Accept meta (your cron passes meta). If you don't need it, store it anyway.
 async function markReminderSent(reminderId, meta = {}) {
   return Reminder.findByIdAndUpdate(
     reminderId,
@@ -56,15 +77,29 @@ async function cancelRemindersForBooking(bookingId) {
   await Reminder.updateMany({ bookingId }, { status: "CANCELLED" });
 }
 
-// If you already have real implementations elsewhere, import them here instead.
-// For now, provide stubs so cron doesn't crash.
 async function sendReminderEmail({ reminder, booking, user }) {
-  // TODO: integrate nodemailer/sendgrid
+  // Send to ALL attendees; fallback to booking owner email if none
+  const attendees = uniqEmails(booking?.attendees);
+  const fallback = uniqEmails(user?.email);
+
+  const recipients = attendees.length ? attendees : fallback;
+  if (!recipients.length) return { ok: false, error: "NO_EMAIL_RECIPIENTS" };
+
+  const subject = buildReminderEmailSubject({ booking, type: reminder.type });
+
+  for (const email of recipients) {
+    const html = buildReminderEmailHtml({ recipientName: null, booking, type: reminder.type });
+    const text = buildReminderEmailText({ recipientName: null, booking, type: reminder.type });
+
+    const res = await sendEmail({ to: email, subject, html, text });
+    if (!res.ok) return { ok: false, error: `EMAIL_FAILED:${email}:${res.error || "unknown"}` };
+  }
+
   return { ok: true, providerMessageId: null };
 }
 
-async function sendReminderSms({ reminder, booking, user }) {
-  // TODO: integrate twilio/africastalking
+// SMS not required for your need, keep stable
+async function sendReminderSms() {
   return { ok: true, providerMessageId: null };
 }
 

@@ -31,6 +31,32 @@ function isYYYYMMDD(s) {
   return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
+function normalizeEmails(input) {
+  if (!input) return [];
+  const arr = Array.isArray(input) ? input : String(input).split(",");
+  return arr
+    .map((x) => String(x).trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isValidEmail(email) {
+  // simple pragmatic validation
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function uniq(list) {
+  const out = [];
+  const seen = new Set();
+  for (const x of list || []) {
+    if (!x) continue;
+    if (!seen.has(x)) {
+      seen.add(x);
+      out.push(x);
+    }
+  }
+  return out;
+}
+
 // Timeline
 router.get("/day", authRequired, async (req, res) => {
   try {
@@ -40,7 +66,6 @@ router.get("/day", authRequired, async (req, res) => {
       return res.status(400).json({ ok: false, message: "date=YYYY-MM-DD required" });
     }
 
-    // ✅ Prevent UI sending 02/12/2026 etc.
     if (!isYYYYMMDD(date)) {
       return res.status(400).json({ ok: false, message: "date must be YYYY-MM-DD" });
     }
@@ -60,7 +85,6 @@ router.get("/day", authRequired, async (req, res) => {
       freeGaps,
     });
   } catch (e) {
-    // ✅ crucial logging to Render logs
     console.error("[/api/day] ERROR", {
       message: e?.message,
       stack: e?.stack,
@@ -83,9 +107,11 @@ router.post("/bookings", authRequired, async (req, res) => {
       startAt,
       durationMinutes,
       meetingLink,
+
+      // ✅ NEW: attendee emails (array or comma string)
+      attendees,
     } = req.body || {};
 
-    // attendeeCount required
     if (!teamName || !startAt || !durationMinutes || attendeeCount == null) {
       return res.status(400).json({
         ok: false,
@@ -98,7 +124,6 @@ router.post("/bookings", authRequired, async (req, res) => {
       return res.status(400).json({ ok: false, message: "attendeeCount must be a number >= 1" });
     }
 
-    // roomId optional in case some old flows don't send it
     let safeRoomId = null;
     if (roomId) {
       if (!mongoose.isValidObjectId(roomId)) {
@@ -118,6 +143,17 @@ router.post("/bookings", authRequired, async (req, res) => {
     }
 
     const newEnd = new Date(newStart.getTime() + dur * 60 * 1000);
+
+    // ✅ attendee emails validation (max 5)
+    const attendeeEmails = uniq(normalizeEmails(attendees));
+    if (attendeeEmails.length > 5) {
+      return res.status(400).json({ ok: false, message: "attendees max is 5 emails" });
+    }
+    for (const em of attendeeEmails) {
+      if (!isValidEmail(em)) {
+        return res.status(400).json({ ok: false, message: `Invalid attendee email: ${em}` });
+      }
+    }
 
     // block booking in the past or too soon (buffer)
     const bufferMin = Number(CONST.BUFFER_MINUTES || 0);
@@ -168,6 +204,7 @@ router.post("/bookings", authRequired, async (req, res) => {
       userId: req.user.id,
       roomId: safeRoomId,
       attendeeCount: headcount,
+      attendees: attendeeEmails, // ✅ persisted
       teamName: safeTeam,
       meetingTitle: safeTitle,
       durationMinutes: dur,
@@ -185,9 +222,10 @@ router.post("/bookings", authRequired, async (req, res) => {
       description: `Booking created: ${booking.teamName} (${headcount} people) | ${newStart.toISOString()} - ${newEnd.toISOString()}`,
       entityType: "BOOKING",
       entityId: booking._id,
-      meta: { roomId: booking.roomId || null, attendeeCount: headcount },
+      meta: { roomId: booking.roomId || null, attendeeCount: headcount, attendees: attendeeEmails },
     });
 
+    // ✅ Create reminder job for ENDING_20 (20 mins before exit)
     await createRemindersForBooking({
       userId: req.user.id,
       bookingId: booking._id,
@@ -195,19 +233,28 @@ router.post("/bookings", authRequired, async (req, res) => {
       endAt: newEnd,
     });
 
-    // Email + SMS confirmation (best effort)
+    // ✅ Email confirmation to ALL attendees (+ booker if not in list)
     try {
       const user = await User.findById(req.user.id);
 
-      if (user?.email) {
+      const recipients = uniq([
+        ...(attendeeEmails || []),
+        ...(user?.email ? [String(user.email).trim().toLowerCase()] : []),
+      ]);
+
+      const subject = buildBookingSubject(booking);
+
+      // Send one-by-one for privacy
+      for (const email of recipients) {
         await sendEmail({
-          to: user.email,
-          subject: buildBookingSubject(booking),
-          html: buildBookingEmailHtml({ user, booking }),
-          text: buildBookingEmailText({ user, booking }),
+          to: email,
+          subject,
+          html: buildBookingEmailHtml({ user, recipientName: null, booking }),
+          text: buildBookingEmailText({ user, recipientName: null, booking }),
         });
       }
 
+      // optional SMS confirmation to booker only
       if (user?.phone) {
         await sendSms({
           to: user.phone,
@@ -236,8 +283,6 @@ router.get("/bookings/mine", authRequired, async (req, res) => {
 });
 
 // Cancel booking
-// ADMIN: hard delete (disappears completely)
-// USER: soft cancel (status=CANCELLED)
 router.delete("/bookings/:id", authRequired, async (req, res) => {
   try {
     const booking = await Booking.findById(req.params.id);
@@ -247,21 +292,18 @@ router.delete("/bookings/:id", authRequired, async (req, res) => {
     const isAdmin = req.user.role === "ADMIN";
     if (!isOwner && !isAdmin) return res.status(403).json({ ok: false, message: "Forbidden" });
 
-    // Best effort: delete google event (do not crash if it fails)
     try {
       if (booking.googleEventId) await deleteEvent(booking.googleEventId);
     } catch (e) {
       console.warn("deleteEvent failed:", e?.message || e);
     }
 
-    // Best effort: cancel reminders
     try {
       await cancelRemindersForBooking(booking._id);
     } catch (e) {
       console.warn("cancelRemindersForBooking failed:", e?.message || e);
     }
 
-    // Activity log BEFORE delete/save so we still have data
     await writeLog({
       req,
       action: "BOOKING_CANCELLED",
@@ -274,12 +316,10 @@ router.delete("/bookings/:id", authRequired, async (req, res) => {
     });
 
     if (isAdmin) {
-      // hard delete
       await Booking.findByIdAndDelete(booking._id);
       return res.json({ ok: true, deleted: true });
     }
 
-    // user soft cancel
     if (booking.status === "CANCELLED") return res.json({ ok: true, booking });
 
     booking.status = "CANCELLED";

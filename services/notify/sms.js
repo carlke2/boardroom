@@ -1,38 +1,29 @@
-const twilio = require("twilio");
-
-function requireEnv(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env ${name}`);
-  return v;
-}
-
-let cachedClient = null;
-
-function getClient() {
-  if (cachedClient) return cachedClient;
-
-  const sid = requireEnv("TWILIO_SID");
-  const token = requireEnv("TWILIO_AUTH_TOKEN");
-  cachedClient = twilio(sid, token);
-  return cachedClient;
+function hasTwilioEnv() {
+  return !!(process.env.TWILIO_SID && process.env.TWILIO_AUTH && process.env.TWILIO_FROM);
 }
 
 async function sendSms({ to, message }) {
-  const client = getClient();
-  const from = requireEnv("TWILIO_PHONE");
+  // If Twilio isn't configured, do not crash the system
+  if (!hasTwilioEnv()) {
+    console.warn("[SMS] Skipped (Twilio env not set)", { to });
+    return { ok: true, providerMessageId: null, skipped: true };
+  }
+
+  const sid = process.env.TWILIO_SID;
+  const auth = process.env.TWILIO_AUTH;
+  const from = process.env.TWILIO_FROM;
+
+  // Lazy import so we only require twilio if configured
+  const twilio = require("twilio");
+  const client = twilio(sid, auth);
 
   try {
-    const resp = await client.messages.create({
-      to,
-      from,
-      body: message
-    });
-
-    console.log("✅ SMS SENT", { to, sid: resp.sid, status: resp.status });
-    return { ok: true, sid: resp.sid, status: resp.status };
-  } catch (err) {
-    console.error("❌ SMS FAILED", { to, error: err.message });
-    throw err;
+    const res = await client.messages.create({ from, to, body: message });
+    console.log("[SMS] SENT", { to, sid: res.sid });
+    return { ok: true, providerMessageId: res.sid };
+  } catch (e) {
+    console.error("[SMS] FAILED", { to, error: e?.message || e });
+    return { ok: false, error: e?.message || "SMS_FAILED" };
   }
 }
 
