@@ -5,7 +5,9 @@ const bcrypt = require("bcryptjs");
 
 const User = require("../models/User");
 const PasswordReset = require("../models/PasswordReset");
-const { sendMail } = require("../services/mailer");
+
+// ✅ Resend mailer (works on Render)
+const { sendEmail } = require("../services/notify/email");
 
 const router = express.Router();
 
@@ -50,10 +52,10 @@ router.post("/forgot-password", async (req, res) => {
     const appUrl = process.env.APP_URL || "http://localhost:5173";
     const link = `${appUrl}/reset-password?token=${token}`;
 
-    // ✅ Debug logs (so we know why no email arrives)
+    // ✅ Debug logs (Resend)
     console.log("[RESET] forgot-password request OK for:", user.email);
-    console.log("[RESET] SMTP_USER is", process.env.SMTP_USER ? "SET" : "MISSING");
-    console.log("[RESET] SMTP_PASS is", process.env.SMTP_PASS ? "SET" : "MISSING");
+    console.log("[RESET] RESEND_API_KEY is", process.env.RESEND_API_KEY ? "SET" : "MISSING");
+    console.log("[RESET] MAIL_FROM is", process.env.MAIL_FROM ? "SET" : "MISSING");
     console.log("[RESET] Reset link:", link);
 
     // ✅ DEV fallback: return link to help you test without email
@@ -63,7 +65,7 @@ router.post("/forgot-password", async (req, res) => {
 
     // ✅ Send mail, but don’t hide errors from server logs
     try {
-      const info = await sendMail({
+      const info = await sendEmail({
         to: user.email,
         subject: "Reset your Boardroom password",
         text:
@@ -72,9 +74,11 @@ router.post("/forgot-password", async (req, res) => {
           `Reset link (valid for ${minutes} minutes):\n${link}\n\n` +
           `If you didn't request this, you can ignore this email.\n\n` +
           `— Boardroom Booking System`,
+        // Optional: add HTML too if you want
+        // html: `<p>Hi ${user.name || "there"},</p><p>Reset link: <a href="${link}">${link}</a></p>`
       });
 
-      console.log("[RESET] Email sent OK:", info?.messageId || info?.response || "sent");
+      console.log("[RESET] Email sent OK:", info?.providerMessageId || "sent");
     } catch (mailErr) {
       console.error("[RESET] Email send FAILED:", mailErr?.message || mailErr);
       // Still respond ok:true for security
