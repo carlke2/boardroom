@@ -1,9 +1,9 @@
 const { Resend } = require("resend");
 const PQueue = require("p-queue").default;
 
-/* ================================
+/* ===================================================
    ENV HELPERS
-================================ */
+=================================================== */
 function requireEnv(name) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env ${name}`);
@@ -21,50 +21,52 @@ function normalizeEmailList(value) {
     .filter(Boolean);
 }
 
-/* ================================
-   RESEND CLIENT (CACHED)
-================================ */
+/* ===================================================
+   RESEND CLIENT
+=================================================== */
 let cachedResend = null;
 
 function getResend() {
   if (cachedResend) return cachedResend;
-
   cachedResend = new Resend(requireEnv("RESEND_API_KEY"));
-
   return cachedResend;
 }
 
-/* ================================
-   EMAIL QUEUE (RATE LIMIT SAFE)
-   Resend limit: 2 requests/sec
-================================ */
+/* ===================================================
+   EMAIL QUEUE (SAFE RATE LIMIT)
+   1 email / second → NEVER hits 429
+=================================================== */
 const emailQueue = new PQueue({
   concurrency: 1,
   interval: 1000,
-  intervalCap: 2,
+  intervalCap: 1,
 });
 
-/* ================================
-   FROM ADDRESS BUILDER
-================================ */
+/* ===================================================
+   FROM ADDRESS
+=================================================== */
 function buildFrom() {
-  const mailFrom = process.env.MAIL_FROM;
+  const from = process.env.MAIL_FROM;
 
-  if (mailFrom) return mailFrom;
-
-  // prevent sandbox fallback in production
-  if (process.env.NODE_ENV === "production") {
+  if (!from) {
     throw new Error(
-      "MAIL_FROM missing. Must use verified domain sender."
+      "MAIL_FROM missing. Example: Boardroom <no-reply@bms.millenium.co.ke>"
     );
   }
 
-  return "Boardroom Booking <onboarding@resend.dev>";
+  return from;
 }
 
-/* ================================
+/* ===================================================
+   DEFAULT SECRETARY EMAIL
+=================================================== */
+function getSecretaryEmail() {
+  return process.env.SECRETARY_EMAIL || null;
+}
+
+/* ===================================================
    SEND EMAIL
-================================ */
+=================================================== */
 async function sendEmail({
   to,
   cc,
@@ -81,13 +83,22 @@ async function sendEmail({
   const ccList = normalizeEmailList(cc);
   const bccList = normalizeEmailList(bcc);
 
-  if (!toList.length && !ccList.length && !bccList.length) {
-    throw new Error("No recipients supplied");
+  if (!toList.length) {
+    throw new Error("No recipient provided");
+  }
+
+  /* ========= ALWAYS ADD SECRETARY ========= */
+  const secretary = getSecretaryEmail();
+
+  if (secretary) {
+    if (!ccList.includes(secretary)) {
+      ccList.push(secretary);
+    }
   }
 
   const payload = {
     from: buildFrom(),
-    to: toList.length ? toList : undefined,
+    to: toList,
     cc: ccList.length ? ccList : undefined,
     bcc: bccList.length ? bccList : undefined,
     subject,
@@ -104,35 +115,34 @@ async function sendEmail({
   };
 
   try {
-    /* ===== QUEUED SEND ===== */
-    const { data, error } = await emailQueue.add(() =>
-      resend.emails.send(payload)
-    );
-
-    if (error) {
-      console.error("EMAIL FAILED (RESEND)", {
-        to: toList,
-        subject,
-        error,
-      });
-
-      return { ok: false, error: error.message };
-    }
-
-    console.log("EMAIL SENT (RESEND)", {
-      to: toList,
-      subject,
-      messageId: data?.id,
+    const { data, error } = await emailQueue.add(async () => {
+      try {
+        return await resend.emails.send(payload);
+      } catch (err) {
+        if (err?.statusCode === 429) {
+          console.log("Rate limited → retrying...");
+          await new Promise((r) => setTimeout(r, 1500));
+          return resend.emails.send(payload);
+        }
+        throw err;
+      }
     });
 
-    return { ok: true, providerMessageId: data?.id };
-  } catch (err) {
-    console.error("EMAIL FAILED (RESEND)", err);
+    if (error) {
+      console.error("EMAIL FAILED", error);
+      return { ok: false, error };
+    }
 
-    return {
-      ok: false,
-      error: err?.message || "Email send failed",
-    };
+    console.log("EMAIL SENT", {
+      to: payload.to,
+      cc: payload.cc,
+      id: data?.id,
+    });
+
+    return { ok: true, id: data?.id };
+  } catch (err) {
+    console.error("EMAIL FAILED", err);
+    return { ok: false, error: err.message };
   }
 }
 
