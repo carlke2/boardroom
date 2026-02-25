@@ -1,5 +1,9 @@
 const { Resend } = require("resend");
+const PQueue = require("p-queue").default;
 
+/* ================================
+   ENV HELPERS
+================================ */
 function requireEnv(name) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env ${name}`);
@@ -8,52 +12,59 @@ function requireEnv(name) {
 
 function normalizeEmailList(value) {
   if (!value) return [];
+
   const arr = Array.isArray(value) ? value : [value];
+
   return arr
     .flatMap((x) => String(x).split(","))
     .map((s) => s.trim())
     .filter(Boolean);
 }
 
-// Resend client (cached)
+/* ================================
+   RESEND CLIENT (CACHED)
+================================ */
 let cachedResend = null;
+
 function getResend() {
   if (cachedResend) return cachedResend;
+
   cachedResend = new Resend(requireEnv("RESEND_API_KEY"));
+
   return cachedResend;
 }
 
-/**
- * buildFrom
- * Priority:
- * 1) MAIL_FROM (recommended) -> "Name <email@domain.com>"
- * 2) MAIL_FROM_EMAIL/MAIL_FROM_NAME (compat)
- * 3) fallback to onboarding@resend.dev (safe default)
- */
+/* ================================
+   EMAIL QUEUE (RATE LIMIT SAFE)
+   Resend limit: 2 requests/sec
+================================ */
+const emailQueue = new PQueue({
+  concurrency: 1,
+  interval: 1000,
+  intervalCap: 2,
+});
+
+/* ================================
+   FROM ADDRESS BUILDER
+================================ */
 function buildFrom() {
   const mailFrom = process.env.MAIL_FROM;
+
   if (mailFrom) return mailFrom;
 
-  const fromEmail =
-    process.env.MAIL_FROM_EMAIL ||
-    process.env.EMAIL_FROM ||
-    "onboarding@resend.dev";
+  // prevent sandbox fallback in production
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "MAIL_FROM missing. Must use verified domain sender."
+    );
+  }
 
-  const fromName =
-    process.env.MAIL_FROM_NAME ||
-    process.env.APP_NAME ||
-    "Boardroom Booking";
-
-  return `${fromName} <${fromEmail}>`;
+  return "Boardroom Booking <onboarding@resend.dev>";
 }
 
-/**
- * sendEmail (Resend)
- * - supports to/cc/bcc as string | string[]
- * - supports attachments (base64) e.g. ICS later
- * NOTE: Resend attachments require { filename, content, contentType }
- * where content is base64 (no data: prefix).
- */
+/* ================================
+   SEND EMAIL
+================================ */
 async function sendEmail({
   to,
   cc,
@@ -71,10 +82,9 @@ async function sendEmail({
   const bccList = normalizeEmailList(bcc);
 
   if (!toList.length && !ccList.length && !bccList.length) {
-    throw new Error("sendEmail: missing recipients (to/cc/bcc)");
+    throw new Error("No recipients supplied");
   }
 
-  // Resend supports either html or text; we’ll pass both when available.
   const payload = {
     from: buildFrom(),
     to: toList.length ? toList : undefined,
@@ -86,45 +96,43 @@ async function sendEmail({
     reply_to: replyTo || process.env.MAIL_REPLY_TO || undefined,
     attachments: Array.isArray(attachments)
       ? attachments.map((a) => ({
-          filename: a.filename || a.name || "attachment",
-          content: a.content, // MUST be base64 string
-          contentType: a.contentType || a.content_type || a.mimetype,
+          filename: a.filename || "attachment",
+          content: a.content,
+          contentType: a.contentType || a.mimetype,
         }))
       : undefined,
   };
 
   try {
-    const { data, error } = await resend.emails.send(payload);
+    /* ===== QUEUED SEND ===== */
+    const { data, error } = await emailQueue.add(() =>
+      resend.emails.send(payload)
+    );
 
     if (error) {
       console.error("EMAIL FAILED (RESEND)", {
         to: toList,
-        cc: ccList,
-        bcc: bccList,
         subject,
         error,
       });
-      return { ok: false, error: error.message || "Email send failed" };
+
+      return { ok: false, error: error.message };
     }
 
     console.log("EMAIL SENT (RESEND)", {
       to: toList,
-      cc: ccList,
-      bcc: bccList,
       subject,
-      providerMessageId: data?.id,
+      messageId: data?.id,
     });
 
     return { ok: true, providerMessageId: data?.id };
   } catch (err) {
-    console.error("EMAIL FAILED (RESEND)", {
-      to: toList,
-      cc: ccList,
-      bcc: bccList,
-      subject,
-      error: err?.message || err,
-    });
-    return { ok: false, error: err?.message || "Email send failed" };
+    console.error("EMAIL FAILED (RESEND)", err);
+
+    return {
+      ok: false,
+      error: err?.message || "Email send failed",
+    };
   }
 }
 
