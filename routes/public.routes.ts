@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { listEvents } from "../services/googleCalendar.js";
+import { occupiedBetween } from "../services/occupancy.js";
 import { dayRangeUTC } from "../services/slots.js";
 import { asString, errorMessage } from "../utils/errors.js";
 
@@ -11,7 +11,7 @@ router.get("/day", async (req, res) => {
     if (!date) return res.status(400).json({ ok: false, message: "date=YYYY-MM-DD required" });
 
     const { start, end } = dayRangeUTC(date);
-    const events = await listEvents(start.toISOString(), end.toISOString());
+    const events = await occupiedBetween(start, end);
     const items = events.map((e) => ({
       title: e.title,
       startAt: e.startAt,

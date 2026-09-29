@@ -14,7 +14,6 @@ export interface IBooking {
   endAt: Date;
   meetingLink: string | null;
   status: BookingStatus;
-  googleEventId: string;
 }
 
 const BookingSchema = new Schema<IBooking>(
@@ -39,7 +38,6 @@ const BookingSchema = new Schema<IBooking>(
     endAt: { type: Date, required: true },
     meetingLink: { type: String, default: null },
     status: { type: String, enum: ["CONFIRMED", "CANCELLED"], default: "CONFIRMED" },
-    googleEventId: { type: String, required: true },
   },
   { timestamps: true }
 );

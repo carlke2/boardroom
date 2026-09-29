@@ -4,7 +4,7 @@ import Booking from "../models/Booking.js";
 import User from "../models/User.js";
 import { authRequired } from "../middleware/auth.js";
 import { CONST } from "../config/constants.js";
-import { listEvents, createEvent, deleteEvent } from "../services/googleCalendar.js";
+import { occupiedBetween } from "../services/occupancy.js";
 import { dayRangeUTC, computeFreeSlots } from "../services/slots.js";
 import { findConflict } from "../services/overlap.js";
 import { createRemindersForBooking, cancelRemindersForBooking } from "../services/reminders.js";
@@ -60,7 +60,7 @@ router.get("/day", authRequired, async (req, res) => {
     }
 
     const { start, end } = dayRangeUTC(date);
-    const events = await listEvents(start.toISOString(), end.toISOString());
+    const events = await occupiedBetween(start, end);
     const { freeSlots, freeGaps, workStart, workEnd } = computeFreeSlots(date, events);
 
     return res.json({
@@ -149,7 +149,7 @@ router.post("/bookings", authRequired, async (req, res) => {
 
     const windowStart = new Date(newStart.getTime() - 24 * 60 * 60 * 1000);
     const windowEnd = new Date(newEnd.getTime() + 24 * 60 * 60 * 1000);
-    const existing = await listEvents(windowStart.toISOString(), windowEnd.toISOString());
+    const existing = await occupiedBetween(windowStart, windowEnd);
     const conflict = findConflict({
       newStart,
       newEnd,
@@ -167,14 +167,6 @@ router.post("/bookings", authRequired, async (req, res) => {
 
     const safeTeam = String(teamName).trim();
     const safeTitle = meetingTitle ? String(meetingTitle).trim() : "";
-    const eventTitle = safeTitle ? `${safeTeam} — ${safeTitle}` : safeTeam;
-
-    const googleEventId = await createEvent({
-      title: eventTitle,
-      startAtISO: newStart.toISOString(),
-      endAtISO: newEnd.toISOString(),
-      meetingLink: meetingLink || null,
-    });
 
     const booking = await Booking.create({
       userId: actor.id,
@@ -187,7 +179,6 @@ router.post("/bookings", authRequired, async (req, res) => {
       startAt: newStart,
       endAt: newEnd,
       meetingLink: meetingLink || null,
-      googleEventId,
       status: "CONFIRMED",
     });
 
@@ -264,12 +255,6 @@ router.delete("/bookings/:id", authRequired, async (req, res) => {
     const isOwner = booking.userId.toString() === actor.id;
     const isAdmin = actor.role === "ADMIN";
     if (!isOwner && !isAdmin) return res.status(403).json({ ok: false, message: "Forbidden" });
-
-    try {
-      if (booking.googleEventId) await deleteEvent(booking.googleEventId);
-    } catch (e) {
-      console.warn("deleteEvent failed:", errorMessage(e));
-    }
 
     try {
       await cancelRemindersForBooking(booking._id);

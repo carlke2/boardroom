@@ -1,9 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
-import { google } from "googleapis";
 import User from "../models/User.js";
 import { authAllowPending, authRequired } from "../middleware/auth.js";
-import { CONST } from "../config/constants.js";
 import type { UserRole } from "../types/auth.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { AuthFlowError, loginWithPassword, requestOtp, selectRole, updateProfile, verifyOtp } from "../services/auth/authFlow.js";
@@ -164,44 +162,6 @@ router.patch(
     } catch (error) {
       return sendFlowError(res, error);
     }
-  })
-);
-
-router.get("/google/connect", (_req, res) => {
-  const client = new google.auth.OAuth2(
-    CONST.GOOGLE.CLIENT_ID,
-    CONST.GOOGLE.CLIENT_SECRET,
-    CONST.GOOGLE.REDIRECT_URI
-  );
-
-  const url = client.generateAuthUrl({
-    access_type: "offline",
-    prompt: "consent",
-    scope: ["https://www.googleapis.com/auth/calendar"],
-  });
-
-  return res.redirect(url);
-});
-
-router.get(
-  "/oauth2callback",
-  asyncHandler(async (req, res) => {
-    const code = typeof req.query.code === "string" ? req.query.code : "";
-    if (!code) return res.status(400).send("Missing ?code");
-
-    const client = new google.auth.OAuth2(
-      CONST.GOOGLE.CLIENT_ID,
-      CONST.GOOGLE.CLIENT_SECRET,
-      CONST.GOOGLE.REDIRECT_URI
-    );
-
-    const { tokens } = await client.getToken(code);
-
-    return res.json({
-      ok: true,
-      message: "Copy this refresh_token into Render env",
-      refresh_token: tokens.refresh_token || null,
-    });
   })
 );
 

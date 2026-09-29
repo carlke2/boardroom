@@ -1,7 +1,7 @@
 {
   "name": "boardroom-booking-server",
   "version": "1.0.0",
-  "description": "Boardroom booking system backend (Express + Mongo + Google Calendar, TypeScript)",
+  "description": "Boardroom booking system backend (Express + Mongo, TypeScript)",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
@@ -29,7 +29,6 @@
     "dotenv": "^17.2.3",
     "exceljs": "^4.4.0",
     "express": "^4.19.2",
-    "googleapis": "^171.2.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.5.3",
     "node-cron": "^4.2.1",

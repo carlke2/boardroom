@@ -15,6 +15,7 @@ import Team from "../../models/Team.js";
 import TeamMember from "../../models/TeamMember.js";
 import CsatResponse from "../../models/CsatResponse.js";
 import type { AuthUser } from "../../types/auth.js";
+import { assignedRoles } from "../auth/session.js";
 import {
   ACTIVE_STATUSES,
   LINK_TYPES,
@@ -320,12 +321,15 @@ export async function ingestEmail(input: {
   if (!email) throw new TicketError(400, "from is required");
   const user = await User.findOne({ email });
   if (!user) throw new TicketError(404, "No user for that email");
+  const roles = assignedRoles(user);
   const actor: AuthUser = {
     id: user.id,
     _id: user._id,
     name: user.name,
     email: user.email,
-    role: user.role,
+    role: roles[0],
+    roles,
+    activeRole: roles[0],
     phone: user.phone || null,
   };
   return createTicket(actor, {
