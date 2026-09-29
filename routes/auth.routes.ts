@@ -1,19 +1,20 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { google } from "googleapis";
 import User from "../models/User.js";
-import { authRequired } from "../middleware/auth.js";
+import { authAllowPending, authRequired } from "../middleware/auth.js";
 import { CONST } from "../config/constants.js";
 import type { UserRole } from "../types/auth.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { AuthFlowError, loginWithPassword, requestOtp, selectRole, updateProfile, verifyOtp } from "../services/auth/authFlow.js";
 
 const router = Router();
 
-function jwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error("JWT_SECRET missing in .env");
-  return secret;
+function sendFlowError(res: { status: (code: number) => { json: (body: unknown) => unknown } }, error: unknown) {
+  if (error instanceof AuthFlowError) {
+    return res.status(error.status).json({ ok: false, message: error.message });
+  }
+  throw error;
 }
 
 router.post(
@@ -50,6 +51,7 @@ router.post(
       phone: normalizedPhone,
       passwordHash,
       role: safeRole,
+      roles: [safeRole],
     });
 
     return res.status(201).json({
@@ -68,38 +70,64 @@ router.post(
 router.post(
   "/login",
   asyncHandler(async (req, res) => {
-    const { email, password } = req.body || {};
-
-    if (!email || !password) {
-      return res.status(400).json({ ok: false, message: "email and password are required" });
+    const email = req.body?.email;
+    const password = req.body?.passwordRaw ?? req.body?.password;
+    try {
+      const session = await loginWithPassword(email, password);
+      return res.json({ ok: true, ...session });
+    } catch (error) {
+      return sendFlowError(res, error);
     }
+  })
+);
 
-    const normalizedEmail = String(email).trim().toLowerCase();
-    const user = await User.findOne({ email: normalizedEmail });
-    if (!user) {
-      return res.status(401).json({ ok: false, message: "Invalid credentials" });
+router.post(
+  "/otp/request",
+  asyncHandler(async (req, res) => {
+    try {
+      const result = await requestOtp(req.body?.phone);
+      return res.json(result);
+    } catch (error) {
+      return sendFlowError(res, error);
     }
+  })
+);
 
-    const match = await bcrypt.compare(String(password), user.passwordHash);
-    if (!match) {
-      return res.status(401).json({ ok: false, message: "Invalid credentials" });
+router.post(
+  "/otp/verify",
+  asyncHandler(async (req, res) => {
+    try {
+      const session = await verifyOtp(req.body?.phone, req.body?.code);
+      return res.json({ ok: true, ...session });
+    } catch (error) {
+      return sendFlowError(res, error);
     }
+  })
+);
 
-    const token = jwt.sign({ id: user._id.toString(), role: user.role }, jwtSecret(), {
-      expiresIn: "7d",
-    });
+router.post(
+  "/select-role",
+  authAllowPending,
+  asyncHandler(async (req, res) => {
+    try {
+      const session = await selectRole(req.user!.id, req.body?.role);
+      return res.json({ ok: true, ...session });
+    } catch (error) {
+      return sendFlowError(res, error);
+    }
+  })
+);
 
-    return res.json({
-      ok: true,
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-      },
-    });
+router.post(
+  "/switch-role",
+  authRequired(),
+  asyncHandler(async (req, res) => {
+    try {
+      const session = await selectRole(req.user!.id, req.body?.role);
+      return res.json({ ok: true, ...session });
+    } catch (error) {
+      return sendFlowError(res, error);
+    }
   })
 );
 
@@ -108,6 +136,34 @@ router.get(
   authRequired,
   asyncHandler(async (req, res) => {
     return res.json({ ok: true, user: req.user });
+  })
+);
+
+router.patch(
+  "/me",
+  authRequired(),
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const hasName = Object.prototype.hasOwnProperty.call(body, "name");
+    const hasPhone = Object.prototype.hasOwnProperty.call(body, "phone");
+    const hasNext = Object.prototype.hasOwnProperty.call(body, "newPassword");
+    if (!hasName && !hasPhone && !hasNext) {
+      return res.status(400).json({ ok: false, message: "name, phone, or newPassword is required" });
+    }
+    if (hasNext && !body.currentPassword) {
+      return res.status(400).json({ ok: false, message: "Current password is required to set a new password" });
+    }
+    try {
+      const user = await updateProfile(req.user!.id, req.user!.role, {
+        name: hasName ? String(body.name || "") : undefined,
+        phone: hasPhone ? String(body.phone || "") : undefined,
+        currentPassword: body.currentPassword ? String(body.currentPassword) : undefined,
+        newPassword: hasNext ? String(body.newPassword || "") : undefined,
+      });
+      return res.json({ ok: true, user });
+    } catch (error) {
+      return sendFlowError(res, error);
+    }
   })
 );
 

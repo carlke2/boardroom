@@ -18,6 +18,7 @@ import ticketRoutes from "./routes/tickets.routes.js";
 import ticketAdminRoutes from "./routes/ticketAdmin.routes.js";
 import ticketConfigRoutes from "./routes/ticketConfig.routes.js";
 import notificationRoutes from "./routes/notifications.routes.js";
+import userAdminRoutes from "./routes/userAdmin.routes.js";
 import { registerTicketNotifications } from "./services/tickets/notify.js";
 
 const app = express();
@@ -44,6 +45,7 @@ app.use(ticketRoutes);
 app.use(ticketAdminRoutes);
 app.use(ticketConfigRoutes);
 app.use(notificationRoutes);
+app.use(userAdminRoutes);
 
 const PORT = process.env.PORT || 5000;
 

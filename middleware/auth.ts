@@ -1,6 +1,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 import User from "../models/User.js";
+import { assignedRoles, isUserRole } from "../services/auth/session.js";
 import type { AuthUser, UserRole } from "../types/auth.js";
 
 interface AccessToken extends JwtPayload {
@@ -8,6 +9,7 @@ interface AccessToken extends JwtPayload {
   _id?: string;
   userId?: string;
   role?: string;
+  pending?: boolean;
 }
 
 function getBearerToken(req: Request): string | null {
@@ -27,7 +29,10 @@ function asRole(role: string | undefined): UserRole {
   return "USER";
 }
 
-async function runAuth(req: Request): Promise<
+async function runAuth(
+  req: Request,
+  allowPending: boolean
+): Promise<
   | { ok: false; status: number; message: string }
   | { ok: true; user: AuthUser; token: string; decoded: AccessToken | string }
 > {
@@ -46,11 +51,20 @@ async function runAuth(req: Request): Promise<
     return { ok: false, status: 401, message: "Invalid token payload" };
   }
 
+  if (decoded.pending && !allowPending) {
+    return { ok: false, status: 401, message: "Role selection required" };
+  }
+
   const userId = decoded.id || decoded._id || decoded.userId || decoded.sub;
   if (!userId) return { ok: false, status: 401, message: "Invalid token payload" };
 
-  const user = await User.findById(userId).select("_id name email role phone");
+  const user = await User.findById(userId).select("_id name email role roles phone active");
   if (!user) return { ok: false, status: 401, message: "User not found" };
+  if (!user.active) return { ok: false, status: 401, message: "Account is inactive" };
+
+  const roles = assignedRoles(user);
+  const tokenRole = decoded.role && isUserRole(decoded.role) ? decoded.role : undefined;
+  const activeRole = tokenRole && roles.includes(tokenRole) ? tokenRole : asRole(user.role);
 
   return {
     ok: true,
@@ -59,7 +73,9 @@ async function runAuth(req: Request): Promise<
       _id: user._id,
       name: user.name,
       email: user.email,
-      role: asRole(user.role),
+      role: activeRole,
+      roles,
+      activeRole,
       phone: user.phone || null,
     },
     token,
@@ -67,9 +83,9 @@ async function runAuth(req: Request): Promise<
   };
 }
 
-async function applyAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+async function applyAuth(req: Request, res: Response, next: NextFunction, allowPending: boolean): Promise<void> {
   try {
-    const result = await runAuth(req);
+    const result = await runAuth(req, allowPending);
     if (!result.ok) {
       res.status(result.status).json({ ok: false, message: result.message });
       return;
@@ -92,13 +108,18 @@ export function authRequired(
 ): RequestHandler | Promise<void> {
   if (args.length === 0) {
     const handler: RequestHandler = (req, res, next) => {
-      void applyAuth(req, res, next);
+      void applyAuth(req, res, next, false);
     };
     return handler;
   }
 
   const [req, res, next] = args;
-  return applyAuth(req, res, next);
+  return applyAuth(req, res, next, false);
+}
+
+/** Accepts a normal session and the short-lived role-selection token. */
+export function authAllowPending(req: Request, res: Response, next: NextFunction): void {
+  void applyAuth(req, res, next, true);
 }
 
 export const requireAuth = authRequired;

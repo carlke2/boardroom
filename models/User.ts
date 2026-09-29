@@ -7,6 +7,7 @@ export interface IUser {
   phone: string;
   passwordHash: string;
   role: UserRole;
+  roles: UserRole[];
   active: boolean;
 }
 
@@ -17,6 +18,7 @@ const UserSchema = new Schema<IUser>(
     phone: { type: String, required: true, trim: true },
     passwordHash: { type: String, required: true },
     role: { type: String, enum: ["ADMIN", "TEAM_LEAD", "AGENT", "USER"], default: "USER" },
+    roles: { type: [String], enum: ["ADMIN", "TEAM_LEAD", "AGENT", "USER"], default: [] },
     active: { type: Boolean, default: true },
   },
   { timestamps: true }

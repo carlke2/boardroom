@@ -18,19 +18,23 @@ async function seedAdmin(): Promise<void> {
       );
     }
 
-    const exists = await User.findOne({ email: ADMIN_EMAIL });
-    if (exists) {
+    const email = ADMIN_EMAIL.trim().toLowerCase();
+    const phone = ADMIN_PHONE.trim();
+
+    const existingAdmin = await User.findOne({ role: "ADMIN" });
+    if (existingAdmin) {
       console.log(" Admin already exists — skipping");
       process.exit(0);
     }
 
     const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
     await User.create({
-      name: ADMIN_NAME,
-      email: ADMIN_EMAIL,
-      phone: ADMIN_PHONE,
+      name: ADMIN_NAME.trim(),
+      email,
+      phone,
       passwordHash,
       role: "ADMIN",
+      active: true,
     });
 
     console.log(" Admin seeded successfully");
