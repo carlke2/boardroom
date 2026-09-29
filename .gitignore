@@ -1,4 +1,5 @@
 # nodemodules
 node_modules/
+dist/
 # dotenv
 .env

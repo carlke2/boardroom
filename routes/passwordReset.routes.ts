@@ -1,0 +1,120 @@
+import { Router } from "express";
+import crypto from "node:crypto";
+import bcrypt from "bcryptjs";
+import User from "../models/User.js";
+import PasswordReset from "../models/PasswordReset.js";
+import { sendEmail } from "../services/notify/email.js";
+
+const router = Router();
+
+function sha256(input: string): string {
+  return crypto.createHash("sha256").update(input).digest("hex");
+}
+
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email) return res.status(400).json({ ok: false, message: "Email is required" });
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      console.log("[RESET] forgot-password: email not found (hidden):", email);
+      return res.json({ ok: true });
+    }
+
+    const token = crypto.randomBytes(32).toString("hex");
+    const tokenHash = sha256(token);
+    const minutes = Number(process.env.RESET_TOKEN_MINUTES || 30);
+    const expiresAt = new Date(Date.now() + minutes * 60 * 1000);
+
+    await PasswordReset.updateMany(
+      { userId: user._id, usedAt: null },
+      { $set: { usedAt: new Date() } }
+    );
+
+    await PasswordReset.create({
+      userId: user._id,
+      tokenHash,
+      expiresAt,
+      usedAt: null,
+    });
+
+    const appUrl = process.env.APP_URL || "http://localhost:5173";
+    const link = `${appUrl}/reset-password?token=${token}`;
+
+    console.log("[RESET] forgot-password request OK for:", user.email);
+    console.log("[RESET] RESEND_API_KEY is", process.env.RESEND_API_KEY ? "SET" : "MISSING");
+    console.log("[RESET] MAIL_FROM is", process.env.MAIL_FROM ? "SET" : "MISSING");
+    console.log("[RESET] Reset link:", link);
+
+    if (process.env.NODE_ENV !== "production" && process.env.RESET_DEV_LINK === "true") {
+      return res.json({ ok: true, devLink: link });
+    }
+
+    try {
+      const info = await sendEmail({
+        to: user.email,
+        subject: "Reset your Boardroom password",
+        text:
+          `Hi ${user.name || "there"},\n\n` +
+          `You requested a password reset.\n\n` +
+          `Reset link (valid for ${minutes} minutes):\n${link}\n\n` +
+          `If you didn't request this, you can ignore this email.\n\n` +
+          `— Boardroom Booking System`,
+      });
+
+      console.log("[RESET] Email sent OK:", info.ok ? info.id || "sent" : "sent");
+    } catch (mailErr) {
+      const message = mailErr instanceof Error ? mailErr.message : String(mailErr);
+      console.error("[RESET] Email send FAILED:", message);
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("forgot-password error:", message);
+    return res.json({ ok: true });
+  }
+});
+
+router.post("/reset-password", async (req, res) => {
+  try {
+    const token = String(req.body?.token || "").trim();
+    const newPassword = String(req.body?.newPassword || "");
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ ok: false, message: "Token and newPassword are required" });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ ok: false, message: "Password must be at least 8 characters" });
+    }
+
+    const tokenHash = sha256(token);
+    const reset = await PasswordReset.findOne({
+      tokenHash,
+      usedAt: null,
+      expiresAt: { $gt: new Date() },
+    });
+
+    if (!reset) {
+      return res.status(400).json({ ok: false, message: "Invalid or expired reset token" });
+    }
+
+    const user = await User.findById(reset.userId);
+    if (!user) return res.status(400).json({ ok: false, message: "User not found" });
+
+    user.passwordHash = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    reset.usedAt = new Date();
+    await reset.save();
+
+    return res.json({ ok: true });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("reset-password error:", message);
+    return res.status(500).json({ ok: false, message: "Server error" });
+  }
+});
+
+export default router;
