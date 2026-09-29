@@ -1,6 +1,6 @@
 import type { Types } from "mongoose";
 
-export type UserRole = "ADMIN" | "USER";
+export type UserRole = "ADMIN" | "TEAM_LEAD" | "AGENT" | "USER";
 
 export interface AuthUser {
   id: string;

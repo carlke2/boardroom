@@ -13,13 +13,19 @@ import passwordResetRoutes from "./routes/passwordReset.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import googleAuthRoutes from "./routes/googleAuth.routes.js";
 import { startReminderCron } from "./jobs/reminderCron.js";
+import { startTicketJobs } from "./jobs/ticketJobs.js";
+import ticketRoutes from "./routes/tickets.routes.js";
+import ticketAdminRoutes from "./routes/ticketAdmin.routes.js";
+import ticketConfigRoutes from "./routes/ticketConfig.routes.js";
+import notificationRoutes from "./routes/notifications.routes.js";
+import { registerTicketNotifications } from "./services/tickets/notify.js";
 
 const app = express();
 
 app.set("trust proxy", 1);
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "8mb" }));
 app.use(requestMeta);
 
 app.get("/health", (_req, res) => {
@@ -34,9 +40,15 @@ app.use("/api", roomRoutes);
 app.use("/api", adminRoutes);
 app.use("/public", publicRoutes);
 app.use("/auth", googleAuthRoutes);
+app.use(ticketRoutes);
+app.use(ticketAdminRoutes);
+app.use(ticketConfigRoutes);
+app.use(notificationRoutes);
 
 const PORT = process.env.PORT || 5000;
 
 await connectMongo();
+registerTicketNotifications();
 startReminderCron();
+startTicketJobs();
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

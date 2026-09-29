@@ -23,7 +23,8 @@ function jwtSecret(): string {
 }
 
 function asRole(role: string | undefined): UserRole {
-  return role === "ADMIN" ? "ADMIN" : "USER";
+  if (role === "ADMIN" || role === "TEAM_LEAD" || role === "AGENT") return role;
+  return "USER";
 }
 
 async function runAuth(req: Request): Promise<

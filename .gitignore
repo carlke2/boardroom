@@ -1,5 +1,6 @@
 # nodemodules
 node_modules/
 dist/
+uploads/
 # dotenv
 .env
