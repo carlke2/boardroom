@@ -1,103 +1,41 @@
 import { Router } from "express";
-import Room from "../models/Room.js";
-import { authRequired } from "../middleware/auth.js";
-import { adminRequired } from "../middleware/admin.js";
-import { writeLog } from "../services/activityLog.js";
-import { errorMessage } from "../utils/errors.js";
+import type { UserQuery } from "../db/rpc.js";
+import { userQuery } from "../db/rpc.js";
+import { authRequired, type AccessClaims } from "../middleware/auth.js";
+import { requireRoles } from "../middleware/requireRole.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+import { HttpError } from "../utils/httpError.js";
+import { optionalDay, optionalLimit } from "../utils/validate.js";
 
-const router = Router();
+const ROLES = ["USER", "AGENT", "TEAM_LEAD", "ADMIN"] as const;
 
-router.get("/rooms", authRequired(), async (_req, res) => {
-  try {
-    const rooms = await Room.find({}).sort({ name: 1 });
-    return res.json({ ok: true, rooms });
-  } catch (e) {
-    return res.status(500).json({ ok: false, message: errorMessage(e) });
-  }
-});
+export function createRoomRouter(query: UserQuery = userQuery): Router {
+  const router = Router();
+  const gate = [authRequired(), requireRoles(...ROLES)] as const;
 
-router.post("/rooms", authRequired(), adminRequired(), async (req, res) => {
-  try {
-    const { name, capacity, location = "", notes = "" } = req.body || {};
-    if (!name) return res.status(400).json({ ok: false, message: "name required" });
+  router.get(
+    "/",
+    ...gate,
+    asyncHandler(async (req, res) => {
+      const claims = (req.claims ?? { sub: req.user!.id }) as AccessClaims;
+      const rows = await query<{ rooms: unknown }>(claims, "select public.list_rooms($1) as rooms", [
+        optionalLimit(req.query.limit),
+      ]);
+      return res.json({ ok: true, rooms: rows[0]?.rooms ?? [] });
+    })
+  );
 
-    const room = await Room.create({
-      name: String(name).trim(),
-      capacity: Number(capacity || 0),
-      location,
-      notes,
-      isActive: true,
-    });
+  router.get(
+    "/day",
+    ...gate,
+    asyncHandler(async (req, res) => {
+      const day = optionalDay(req.query.day);
+      if (!day) throw new HttpError(422, "day is required", "validation");
+      const claims = (req.claims ?? { sub: req.user!.id }) as AccessClaims;
+      const rows = await query<{ day: unknown }>(claims, "select public.room_day($1::date) as day", [day]);
+      return res.json({ ok: true, ...(rows[0]?.day as object) });
+    })
+  );
 
-    await writeLog({
-      req,
-      action: "ROOM_CREATED",
-      description: `Room created: ${room.name} (Cap ${room.capacity || 0})`,
-      entityType: "ROOM",
-      entityId: room._id,
-    });
-
-    return res.status(201).json({ ok: true, room });
-  } catch (e) {
-    const code = e && typeof e === "object" && "code" in e ? (e as { code?: number }).code : undefined;
-    if (code === 11000) {
-      return res.status(409).json({ ok: false, message: "Room name already exists" });
-    }
-    return res.status(500).json({ ok: false, message: errorMessage(e) });
-  }
-});
-
-router.patch("/rooms/:id", authRequired(), adminRequired(), async (req, res) => {
-  try {
-    const patch: {
-      name?: string;
-      capacity?: number;
-      isActive?: boolean;
-      location?: string;
-      notes?: string;
-    } = {};
-
-    if (req.body?.name != null) patch.name = String(req.body.name).trim();
-    if (req.body?.capacity != null) patch.capacity = Number(req.body.capacity || 0);
-    if (req.body?.isActive != null) patch.isActive = Boolean(req.body.isActive);
-    if (req.body?.location != null) patch.location = String(req.body.location);
-    if (req.body?.notes != null) patch.notes = String(req.body.notes);
-
-    const room = await Room.findByIdAndUpdate(req.params.id, patch, { new: true });
-    if (!room) return res.status(404).json({ ok: false, message: "Room not found" });
-
-    await writeLog({
-      req,
-      action: "ROOM_UPDATED",
-      description: `Room updated: ${room.name} (Cap ${room.capacity || 0})`,
-      entityType: "ROOM",
-      entityId: room._id,
-      meta: patch,
-    });
-
-    return res.json({ ok: true, room });
-  } catch (e) {
-    return res.status(500).json({ ok: false, message: errorMessage(e) });
-  }
-});
-
-router.delete("/rooms/:id", authRequired(), adminRequired(), async (req, res) => {
-  try {
-    const room = await Room.findByIdAndDelete(req.params.id);
-    if (!room) return res.status(404).json({ ok: false, message: "Room not found" });
-
-    await writeLog({
-      req,
-      action: "ROOM_DELETED",
-      description: `Room deleted: ${room.name} (Cap ${room.capacity || 0})`,
-      entityType: "ROOM",
-      entityId: room._id,
-    });
-
-    return res.json({ ok: true });
-  } catch (e) {
-    return res.status(500).json({ ok: false, message: errorMessage(e) });
-  }
-});
-
-export default router;
+  return router;
+}

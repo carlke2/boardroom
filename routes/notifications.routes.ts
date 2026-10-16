@@ -1,36 +1,61 @@
 import { Router } from "express";
-import Notification from "../models/Notification.js";
-import { authRequired } from "../middleware/auth.js";
-import { requireUser, wrapTicket } from "./ticketHttp.js";
+import type { UserQuery } from "../db/rpc.js";
+import { userQuery } from "../db/rpc.js";
+import { authRequired, type AccessClaims } from "../middleware/auth.js";
+import { requireRoles } from "../middleware/requireRole.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+import { optionalLimit, optionalTimestamp, requiredUuid } from "../utils/validate.js";
 
-const router = Router();
+const ROLES = ["USER", "AGENT", "TEAM_LEAD", "ADMIN"] as const;
 
-router.get(
-  "/notifications",
-  authRequired(),
-  wrapTicket(async (req, res) => {
-    const actor = requireUser(req);
-    const items = await Notification.find({ userId: actor.id }).sort({ createdAt: -1 }).limit(100);
-    res.json({ ok: true, notifications: items });
-  })
-);
+function claimsOf(req: { claims?: unknown; user?: { id: string } }): AccessClaims {
+  return (req.claims ?? { sub: req.user!.id }) as AccessClaims;
+}
 
-router.post(
-  "/notifications/:id/read",
-  authRequired(),
-  wrapTicket(async (req, res) => {
-    const actor = requireUser(req);
-    const item = await Notification.findOneAndUpdate(
-      { _id: req.params.id, userId: actor.id },
-      { readAt: new Date() },
-      { new: true }
-    );
-    if (!item) {
-      res.status(404).json({ ok: false, message: "Notification not found" });
-      return;
-    }
-    res.json({ ok: true, notification: item });
-  })
-);
+export function createNotificationRouter(query: UserQuery = userQuery): Router {
+  const router = Router();
+  const gate = [authRequired(), requireRoles(...ROLES)] as const;
 
-export default router;
+  router.get(
+    "/",
+    ...gate,
+    asyncHandler(async (req, res) => {
+      const rows = await query(claimsOf(req), "select * from public.list_notifications($1, $2)", [
+        optionalLimit(req.query.limit),
+        optionalTimestamp(req.query.before, "before"),
+      ]);
+      return res.json({ ok: true, notifications: rows });
+    })
+  );
+
+  router.get(
+    "/unread-count",
+    ...gate,
+    asyncHandler(async (req, res) => {
+      const rows = await query<{ unread: number }>(claimsOf(req), "select public.unread_notification_count() as unread");
+      return res.json({ ok: true, unread: Number(rows[0]?.unread ?? 0) });
+    })
+  );
+
+  router.post(
+    "/read-all",
+    ...gate,
+    asyncHandler(async (req, res) => {
+      const rows = await query<{ updated: number }>(claimsOf(req), "select public.mark_all_notifications_read() as updated");
+      return res.json({ ok: true, updated: Number(rows[0]?.updated ?? 0) });
+    })
+  );
+
+  router.post(
+    "/:id/read",
+    ...gate,
+    asyncHandler(async (req, res) => {
+      const rows = await query(claimsOf(req), "select * from public.mark_notification_read($1::uuid)", [
+        requiredUuid(req.params.id, "id"),
+      ]);
+      return res.json({ ok: true, notification: rows[0] ?? null });
+    })
+  );
+
+  return router;
+}

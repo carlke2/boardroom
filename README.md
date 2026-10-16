@@ -28,7 +28,7 @@ Node.js
 
 Express.js
 
-MongoDB
+Postgres
 
 RESTful APIs
 
@@ -101,11 +101,7 @@ Install dependencies:
 npm install
 
 
-Create a .env file and configure:
-
-PORT=5000
-MONGO_URI=your_mongodb_connection_string
-JWT_SECRET=your_secret_key
+Copy backend/.env.example to backend/.env and fill the names there. The API reads that file only.
 
 
 Run the development server:

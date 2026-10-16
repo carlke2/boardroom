@@ -1,22 +1,27 @@
 {
   "name": "boardroom-booking-server",
   "version": "1.0.0",
-  "description": "Boardroom booking system backend (Express + Mongo, TypeScript)",
+  "description": "Boardroom booking system backend (Express + Postgres, TypeScript)",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch index.ts",
-    "start": "node dist/index.js",
-    "build": "tsc -p tsconfig.json",
+    "env:check": "tsx scripts/env-check.ts",
+    "dev": "npm run env:check && tsx watch index.ts",
+    "start": "npm run env:check && node dist/index.js",
+    "build": "npm run env:check && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "seed:admin": "tsx scripts/seedAdmin.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "seed:admin": "tsx scripts/seedAdmin.ts",
+    "dev:seed-users": "tsx scripts/devSeedUsers.ts",
+    "dev:seed-data": "tsx scripts/devSeedData.ts",
+    "dev:cleanup": "tsx scripts/devCleanup.ts"
   },
   "keywords": [
     "boardroom",
     "booking",
     "calendar",
     "express",
-    "mongodb"
+    "postgres"
   ],
   "author": "salat",
   "license": "ISC",
@@ -29,14 +34,16 @@
     "dotenv": "^17.2.3",
     "exceljs": "^4.4.0",
     "express": "^4.19.2",
+    "jose": "^6.2.12",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^8.5.3",
     "node-cron": "^4.2.1",
     "nodemailer": "^6.10.1",
     "p-queue": "^9.1.0",
     "pdfkit": "^0.17.2",
+    "pg": "^8.23.1",
     "resend": "^6.9.2",
-    "twilio": "^5.12.1"
+    "twilio": "^5.12.1",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -45,6 +52,7 @@
     "@types/node": "^22.13.14",
     "@types/nodemailer": "^6.4.17",
     "@types/pdfkit": "^0.13.9",
+    "@types/pg": "^8.23.1",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   }

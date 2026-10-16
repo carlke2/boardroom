@@ -24,7 +24,7 @@ export function dayRangeLocal(dateYYYYMMDD: string): { start: Date; end: Date } 
   return { start, end };
 }
 
-function buildWorkWindow(dateYYYYMMDD: string): { workStart: Date; workEnd: Date } {
+export function buildWorkWindow(dateYYYYMMDD: string): { workStart: Date; workEnd: Date } {
   const { h: sh, m: sm } = parseHHMM(CONST.WORK_START);
   const { h: eh, m: em } = parseHHMM(CONST.WORK_END);
 
@@ -78,6 +78,19 @@ export function computeFreeSlots(
   }
 
   return { freeGaps, freeSlots, workStart, workEnd };
+}
+
+function localDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/** True when the booking sits inside the configured work window for its local start day. */
+export function fitsWorkWindow(start: Date, end: Date): boolean {
+  const { workStart, workEnd } = buildWorkWindow(localDateKey(start));
+  return start.getTime() >= workStart.getTime() && end.getTime() <= workEnd.getTime();
 }
 
 export const dayRangeUTC = dayRangeLocal;

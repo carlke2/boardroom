@@ -1,168 +1,216 @@
 import { Router } from "express";
-import bcrypt from "bcryptjs";
-import User from "../models/User.js";
-import { authAllowPending, authRequired } from "../middleware/auth.js";
+import { authRequired, bearerToken, verifyAccessToken, type AccessClaims } from "../middleware/auth.js";
+import { rateLimit } from "../middleware/rateLimit.js";
+import { resolveRole, RoleForbidden } from "../middleware/role.js";
+import { getEnv } from "../config/env.js";
+import { AuthProviderError } from "../services/auth/errors.js";
+import {
+  loginWithPassword,
+  logoutSession,
+  profileForClaims,
+  refreshSession,
+  registerAccount,
+  requestPasswordReset,
+  updatePassword,
+  type AuthProfile,
+  type AuthTokens,
+} from "../services/auth/supabaseAuth.js";
 import type { UserRole } from "../types/auth.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { AuthFlowError, loginWithPassword, requestOtp, selectRole, updateProfile, verifyOtp } from "../services/auth/authFlow.js";
 
-const router = Router();
+const WINDOW_MS = 15 * 60 * 1000;
 
-function sendFlowError(res: { status: (code: number) => { json: (body: unknown) => unknown } }, error: unknown) {
-  if (error instanceof AuthFlowError) {
+export interface AuthProvider {
+  login(email: string, password: string): Promise<AuthTokens>;
+  register(input: { email: string; password: string; name?: string; phone?: string }): Promise<{
+    user: { id: string; email: string | null };
+    tokens: AuthTokens | null;
+  }>;
+  forgotPassword(email: string): Promise<void>;
+  resetPassword(accessToken: string, password: string): Promise<void>;
+  refresh(refreshToken: string): Promise<AuthTokens>;
+  logout(accessToken: string): Promise<void>;
+  me(claims: Record<string, unknown>, role: UserRole): Promise<AuthProfile>;
+}
+
+export const liveAuthProvider: AuthProvider = {
+  login: loginWithPassword,
+  register: registerAccount,
+  forgotPassword: requestPasswordReset,
+  resetPassword: updatePassword,
+  refresh: refreshSession,
+  logout: logoutSession,
+  me: profileForClaims,
+};
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function companyEmailAllowed(email: string): boolean {
+  const domain = getEnv().COMPANY_DOMAIN.trim().toLowerCase();
+  if (!domain) return true;
+  return email.endsWith(`@${domain}`);
+}
+
+function sendError(res: { status: (code: number) => { json: (body: unknown) => unknown } }, error: unknown) {
+  if (error instanceof AuthProviderError) {
     return res.status(error.status).json({ ok: false, message: error.message });
   }
   throw error;
 }
 
-router.post(
-  "/register",
-  asyncHandler(async (req, res) => {
-    const { name, email, phone, password, role } = req.body || {};
+export function createAuthRouter(provider: AuthProvider = liveAuthProvider): Router {
+  const router = Router();
 
-    if (!name || !email || !phone || !password) {
-      return res.status(400).json({
-        ok: false,
-        message: "name, email, phone, password are required",
-      });
-    }
+  router.post(
+    "/login",
+    rateLimit({ windowMs: WINDOW_MS, max: 10, keyPrefix: "login" }),
+    asyncHandler(async (req, res) => {
+      const email = text(req.body?.email).toLowerCase();
+      const password = text(req.body?.password) || text(req.body?.passwordRaw);
+      if (!email || !password) return res.status(400).json({ ok: false, message: "email and password are required" });
+      try {
+        const session = await provider.login(email, password);
+        let claims: AccessClaims;
+        try {
+          claims = await verifyAccessToken(session.accessToken);
+        } catch {
+          return res.json({ ok: true, ...session });
+        }
+        const role = await resolveRole(claims);
+        const user = await provider.me(claims, role);
+        return res.json({ ok: true, ...session, user: { ...user, role } });
+      } catch (error) {
+        if (error instanceof RoleForbidden) return res.status(error.status).json(error.body);
+        return sendError(res, error);
+      }
+    })
+  );
 
-    const normalizedEmail = String(email).trim().toLowerCase();
-    const normalizedPhone = String(phone).trim();
+  router.post(
+    "/register",
+    rateLimit({ windowMs: WINDOW_MS, max: 5, keyPrefix: "register" }),
+    asyncHandler(async (req, res) => {
+      const email = text(req.body?.email).toLowerCase();
+      const password = text(req.body?.password);
+      const name = text(req.body?.name);
+      const phone = text(req.body?.phone);
+      if (!email || !password) return res.status(400).json({ ok: false, message: "email and password are required" });
+      if (password.length < getEnv().MIN_PASSWORD_LENGTH) {
+        return res.status(400).json({
+          ok: false,
+          message: `Password must be at least ${getEnv().MIN_PASSWORD_LENGTH} characters`,
+        });
+      }
+      if (!companyEmailAllowed(email)) return res.status(400).json({ ok: false, message: "Use your company email" });
+      try {
+        const created = await provider.register({ email, password, name: name || undefined, phone: phone || undefined });
+        return res.status(201).json({ ok: true, user: created.user, ...(created.tokens ?? {}) });
+      } catch (error) {
+        return sendError(res, error);
+      }
+    })
+  );
 
-    const existsEmail = await User.findOne({ email: normalizedEmail });
-    if (existsEmail) {
-      return res.status(409).json({ ok: false, message: "Email already in use" });
-    }
+  router.post(
+    "/forgot-password",
+    rateLimit({ windowMs: WINDOW_MS, max: 5, keyPrefix: "forgot" }),
+    asyncHandler(async (req, res) => {
+      const email = text(req.body?.email).toLowerCase();
+      if (!email) return res.status(400).json({ ok: false, message: "email is required" });
+      try {
+        await provider.forgotPassword(email);
+        return res.json({ ok: true });
+      } catch (error) {
+        return sendError(res, error);
+      }
+    })
+  );
 
-    const existsPhone = await User.findOne({ phone: normalizedPhone });
-    if (existsPhone) {
-      return res.status(409).json({ ok: false, message: "Phone already in use" });
-    }
+  router.post(
+    "/reset-password",
+    rateLimit({ windowMs: WINDOW_MS, max: 10, keyPrefix: "reset" }),
+    asyncHandler(async (req, res) => {
+      const password = text(req.body?.password);
+      const accessToken = text(req.body?.accessToken) || bearerToken(req) || "";
+      if (!accessToken || !password) {
+        return res.status(400).json({ ok: false, message: "accessToken and password are required" });
+      }
+      if (password.length < getEnv().MIN_PASSWORD_LENGTH) {
+        return res.status(400).json({
+          ok: false,
+          message: `Password must be at least ${getEnv().MIN_PASSWORD_LENGTH} characters`,
+        });
+      }
+      try {
+        await verifyAccessToken(accessToken);
+      } catch {
+        return res.status(401).json({ ok: false, message: "Invalid token" });
+      }
+      try {
+        await provider.resetPassword(accessToken, password);
+        return res.json({ ok: true });
+      } catch (error) {
+        return sendError(res, error);
+      }
+    })
+  );
 
-    const passwordHash = await bcrypt.hash(String(password), 10);
-    const safeRole: UserRole = role === "ADMIN" ? "ADMIN" : "USER";
+  router.post(
+    "/refresh",
+    rateLimit({ windowMs: WINDOW_MS, max: 10, keyPrefix: "refresh" }),
+    asyncHandler(async (req, res) => {
+      const refreshToken = text(req.body?.refreshToken);
+      if (!refreshToken) return res.status(422).json({ ok: false, message: "refreshToken is required", code: "validation" });
+      try {
+        const session = await provider.refresh(refreshToken);
+        return res.json({ ok: true, ...session });
+      } catch (error) {
+        if (error instanceof AuthProviderError && (error.status === 400 || error.status === 401)) {
+          return res.status(401).json({ ok: false, message: "Invalid refresh token", code: "refresh_invalid" });
+        }
+        return sendError(res, error);
+      }
+    })
+  );
 
-    const user = await User.create({
-      name: String(name).trim(),
-      email: normalizedEmail,
-      phone: normalizedPhone,
-      passwordHash,
-      role: safeRole,
-      roles: [safeRole],
-    });
+  router.post(
+    "/logout",
+    asyncHandler(async (req, res) => {
+      const accessToken = bearerToken(req);
+      if (!accessToken) return res.status(401).json({ ok: false, message: "Missing token", code: "token_invalid" });
+      try {
+        await verifyAccessToken(accessToken);
+      } catch (error) {
+        const expired = error instanceof Error && (error.name === "JWTExpired" || (error as { code?: string }).code === "ERR_JWT_EXPIRED");
+        return res.status(401).json(
+          expired
+            ? { ok: false, message: "Token expired", code: "token_expired" }
+            : { ok: false, message: "Invalid token", code: "token_invalid" }
+        );
+      }
+      try {
+        await provider.logout(accessToken);
+        return res.json({ ok: true });
+      } catch (error) {
+        return sendError(res, error);
+      }
+    })
+  );
 
-    return res.status(201).json({
-      ok: true,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-      },
-    });
-  })
-);
+  router.get(
+    "/me",
+    authRequired(),
+    asyncHandler(async (req, res) => {
+      const claims = (req.claims ?? { sub: req.user!.id }) as AccessClaims;
+      const role = await resolveRole(claims, req);
+      const user = await provider.me(claims, role);
+      return res.json({ ok: true, user: { ...user, role } });
+    })
+  );
 
-router.post(
-  "/login",
-  asyncHandler(async (req, res) => {
-    const email = req.body?.email;
-    const password = req.body?.passwordRaw ?? req.body?.password;
-    try {
-      const session = await loginWithPassword(email, password);
-      return res.json({ ok: true, ...session });
-    } catch (error) {
-      return sendFlowError(res, error);
-    }
-  })
-);
+  return router;
+}
 
-router.post(
-  "/otp/request",
-  asyncHandler(async (req, res) => {
-    try {
-      const result = await requestOtp(req.body?.phone);
-      return res.json(result);
-    } catch (error) {
-      return sendFlowError(res, error);
-    }
-  })
-);
-
-router.post(
-  "/otp/verify",
-  asyncHandler(async (req, res) => {
-    try {
-      const session = await verifyOtp(req.body?.phone, req.body?.code);
-      return res.json({ ok: true, ...session });
-    } catch (error) {
-      return sendFlowError(res, error);
-    }
-  })
-);
-
-router.post(
-  "/select-role",
-  authAllowPending,
-  asyncHandler(async (req, res) => {
-    try {
-      const session = await selectRole(req.user!.id, req.body?.role);
-      return res.json({ ok: true, ...session });
-    } catch (error) {
-      return sendFlowError(res, error);
-    }
-  })
-);
-
-router.post(
-  "/switch-role",
-  authRequired(),
-  asyncHandler(async (req, res) => {
-    try {
-      const session = await selectRole(req.user!.id, req.body?.role);
-      return res.json({ ok: true, ...session });
-    } catch (error) {
-      return sendFlowError(res, error);
-    }
-  })
-);
-
-router.get(
-  "/me",
-  authRequired,
-  asyncHandler(async (req, res) => {
-    return res.json({ ok: true, user: req.user });
-  })
-);
-
-router.patch(
-  "/me",
-  authRequired(),
-  asyncHandler(async (req, res) => {
-    const body = req.body || {};
-    const hasName = Object.prototype.hasOwnProperty.call(body, "name");
-    const hasPhone = Object.prototype.hasOwnProperty.call(body, "phone");
-    const hasNext = Object.prototype.hasOwnProperty.call(body, "newPassword");
-    if (!hasName && !hasPhone && !hasNext) {
-      return res.status(400).json({ ok: false, message: "name, phone, or newPassword is required" });
-    }
-    if (hasNext && !body.currentPassword) {
-      return res.status(400).json({ ok: false, message: "Current password is required to set a new password" });
-    }
-    try {
-      const user = await updateProfile(req.user!.id, req.user!.role, {
-        name: hasName ? String(body.name || "") : undefined,
-        phone: hasPhone ? String(body.phone || "") : undefined,
-        currentPassword: body.currentPassword ? String(body.currentPassword) : undefined,
-        newPassword: hasNext ? String(body.newPassword || "") : undefined,
-      });
-      return res.json({ ok: true, user });
-    } catch (error) {
-      return sendFlowError(res, error);
-    }
-  })
-);
-
-export default router;
+export default createAuthRouter();

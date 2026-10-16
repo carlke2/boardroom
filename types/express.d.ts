@@ -7,6 +7,7 @@ declare global {
       user?: AuthUser;
       token?: string;
       jwt?: JwtPayload | string;
+      claims?: Record<string, unknown>;
       requestMeta?: RequestMeta;
     }
   }

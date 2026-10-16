@@ -1,10 +1,8 @@
-import type { Types } from "mongoose";
-
 export type UserRole = "ADMIN" | "TEAM_LEAD" | "AGENT" | "USER";
 
 export interface AuthUser {
   id: string;
-  _id: Types.ObjectId;
+  _id: string;
   name: string;
   email: string;
   role: UserRole;
