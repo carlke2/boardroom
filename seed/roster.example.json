@@ -1,0 +1,44 @@
+{
+  "seedTag": "dev-seed",
+  "teams": [
+    {
+      "name": "Example Support",
+      "leadEmail": "lead@example.com",
+      "memberEmails": ["agent@example.com"]
+    }
+  ],
+  "people": [
+    {
+      "name": "Example User",
+      "email": "user@example.com",
+      "phone": "+10000000001",
+      "role": "USER"
+    },
+    {
+      "name": "Example Requester",
+      "email": "requester@example.com",
+      "phone": "+10000000002",
+      "role": "USER"
+    },
+    {
+      "name": "Example Agent",
+      "email": "agent@example.com",
+      "phone": "+10000000003",
+      "role": "AGENT",
+      "team": "Example Support"
+    },
+    {
+      "name": "Example Lead",
+      "email": "lead@example.com",
+      "phone": "+10000000004",
+      "role": "TEAM_LEAD",
+      "team": "Example Support"
+    },
+    {
+      "name": "Example Admin",
+      "email": "ops-admin@example.com",
+      "phone": "+10000000005",
+      "role": "ADMIN"
+    }
+  ]
+}

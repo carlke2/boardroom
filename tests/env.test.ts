@@ -7,7 +7,6 @@ import {
   diffEnvKeys,
   envExamplePath,
   envObjectSchema,
-  DEV_TEST_ENV_KEYS,
   parseEnv,
   readEnvKeys,
   runEnvCheck,
@@ -22,10 +21,7 @@ test("parseEnv lists every missing name and no values", () => {
       assert.ok(error instanceof Error);
       assert.match(error.message, /^Invalid environment\. Missing or invalid: /);
       const names = error.message.slice("Invalid environment. Missing or invalid: ".length).split(", ");
-      const required = Object.keys(envObjectSchema.shape)
-        .filter((key) => !DEV_TEST_ENV_KEYS.includes(key as (typeof DEV_TEST_ENV_KEYS)[number]))
-        .sort();
-      assert.deepEqual(names, required);
+      assert.deepEqual(names, Object.keys(envObjectSchema.shape).sort());
       assert.equal(error.message.includes("postgresql"), false);
       return true;
     }
@@ -51,12 +47,8 @@ test("optional integrations and empty seed password do not block startup", () =>
   });
   assert.equal(env.FCM_PROJECT_ID, "");
   assert.equal(env.SEED_ADMIN_PASSWORD, "");
-  assert.equal(env.DEV_TEST_USER_EMAIL, "");
-  assert.equal(env.DEV_TEST_ADMIN_PASSWORD, "");
-  assert.throws(
-    () => parseEnv({ ...validEnvInput, SEED_ADMIN_PASSWORD: "short" }),
-    /SEED_ADMIN_PASSWORD/
-  );
+  const tooShort = "x".repeat(3);
+  assert.throws(() => parseEnv({ ...validEnvInput, SEED_ADMIN_PASSWORD: tooShort }), /SEED_ADMIN_PASSWORD/);
 });
 
 test("env file check fails on extra env files and key drift", () => {

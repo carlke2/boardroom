@@ -4,3 +4,5 @@ dist/
 uploads/
 # dotenv
 .env
+# Local roster. Never commit real people or credentials.
+seed/roster.local.json

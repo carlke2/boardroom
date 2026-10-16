@@ -9,7 +9,6 @@ import {
   logoutSession,
   profileForClaims,
   refreshSession,
-  registerAccount,
   requestPasswordReset,
   updatePassword,
   type AuthProfile,
@@ -22,10 +21,6 @@ const WINDOW_MS = 15 * 60 * 1000;
 
 export interface AuthProvider {
   login(email: string, password: string): Promise<AuthTokens>;
-  register(input: { email: string; password: string; name?: string; phone?: string }): Promise<{
-    user: { id: string; email: string | null };
-    tokens: AuthTokens | null;
-  }>;
   forgotPassword(email: string): Promise<void>;
   resetPassword(accessToken: string, password: string): Promise<void>;
   refresh(refreshToken: string): Promise<AuthTokens>;
@@ -35,7 +30,6 @@ export interface AuthProvider {
 
 export const liveAuthProvider: AuthProvider = {
   login: loginWithPassword,
-  register: registerAccount,
   forgotPassword: requestPasswordReset,
   resetPassword: updatePassword,
   refresh: refreshSession,
@@ -45,12 +39,6 @@ export const liveAuthProvider: AuthProvider = {
 
 function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function companyEmailAllowed(email: string): boolean {
-  const domain = getEnv().COMPANY_DOMAIN.trim().toLowerCase();
-  if (!domain) return true;
-  return email.endsWith(`@${domain}`);
 }
 
 function sendError(res: { status: (code: number) => { json: (body: unknown) => unknown } }, error: unknown) {
@@ -91,25 +79,8 @@ export function createAuthRouter(provider: AuthProvider = liveAuthProvider): Rou
   router.post(
     "/register",
     rateLimit({ windowMs: WINDOW_MS, max: 5, keyPrefix: "register" }),
-    asyncHandler(async (req, res) => {
-      const email = text(req.body?.email).toLowerCase();
-      const password = text(req.body?.password);
-      const name = text(req.body?.name);
-      const phone = text(req.body?.phone);
-      if (!email || !password) return res.status(400).json({ ok: false, message: "email and password are required" });
-      if (password.length < getEnv().MIN_PASSWORD_LENGTH) {
-        return res.status(400).json({
-          ok: false,
-          message: `Password must be at least ${getEnv().MIN_PASSWORD_LENGTH} characters`,
-        });
-      }
-      if (!companyEmailAllowed(email)) return res.status(400).json({ ok: false, message: "Use your company email" });
-      try {
-        const created = await provider.register({ email, password, name: name || undefined, phone: phone || undefined });
-        return res.status(201).json({ ok: true, user: created.user, ...(created.tokens ?? {}) });
-      } catch (error) {
-        return sendError(res, error);
-      }
+    asyncHandler(async (_req, res) => {
+      return res.status(403).json({ ok: false, message: "Public signup is disabled", code: "signup_disabled" });
     })
   );
 

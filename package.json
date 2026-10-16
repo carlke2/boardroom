@@ -12,9 +12,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "seed:admin": "tsx scripts/seedAdmin.ts",
-    "dev:seed-users": "tsx scripts/devSeedUsers.ts",
-    "dev:seed-data": "tsx scripts/devSeedData.ts",
-    "dev:cleanup": "tsx scripts/devCleanup.ts"
+    "seed:users": "tsx scripts/seedUsers.ts",
+    "seed:data": "tsx scripts/seedData.ts",
+    "seed:cleanup": "tsx scripts/seedCleanup.ts",
+    "check:roles": "tsx scripts/checkRoles.ts"
   },
   "keywords": [
     "boardroom",

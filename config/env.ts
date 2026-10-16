@@ -16,11 +16,8 @@ const clock = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 const text = z.string().trim().min(1);
 const optionalText = z.string().trim();
 const optionalEmail = z.union([z.literal(""), z.string().trim().email()]);
-const optionalBlank = optionalText.optional().default("");
-const optionalBlankEmail = optionalEmail.optional().default("");
-
-/** Dev seed only. Absent or blank is valid at startup; the seed scripts require values. */
-export const DEV_TEST_ENV_KEYS = [
+/** Leftover local keys. Ignored by env:check so backend/.env need not be edited. */
+export const DEPRECATED_ENV_KEYS = [
   "DEV_TEST_USER_EMAIL",
   "DEV_TEST_USER_PASSWORD",
   "DEV_TEST_AGENT_EMAIL",
@@ -82,14 +79,6 @@ export const envObjectSchema = z
     SEED_ADMIN_NAME: text,
     SEED_ADMIN_PHONE: optionalText,
     ALLOW_PROD_SEED: flag,
-    DEV_TEST_USER_EMAIL: optionalBlankEmail,
-    DEV_TEST_USER_PASSWORD: optionalBlank,
-    DEV_TEST_AGENT_EMAIL: optionalBlankEmail,
-    DEV_TEST_AGENT_PASSWORD: optionalBlank,
-    DEV_TEST_LEAD_EMAIL: optionalBlankEmail,
-    DEV_TEST_LEAD_PASSWORD: optionalBlank,
-    DEV_TEST_ADMIN_EMAIL: optionalBlankEmail,
-    DEV_TEST_ADMIN_PASSWORD: optionalBlank,
   })
   .strict();
 
@@ -171,11 +160,12 @@ export function runEnvCheck(): void {
     throw new Error(`Unexpected env files: ${unexpected.join(", ")}`);
   }
   const diff = diffEnvKeys();
-  const optional = new Set<string>(DEV_TEST_ENV_KEYS);
-  const missing = diff.missing.filter((key) => !optional.has(key));
-  if (missing.length || diff.extra.length) {
+  const deprecated = new Set<string>(DEPRECATED_ENV_KEYS);
+  const missing = diff.missing.filter((key) => !deprecated.has(key));
+  const extra = diff.extra.filter((key) => !deprecated.has(key));
+  if (missing.length || extra.length) {
     throw new Error(
-      `Env keys differ. Missing: ${missing.join(", ") || "(none)"}. Extra: ${diff.extra.join(", ") || "(none)"}`
+      `Env keys differ. Missing: ${missing.join(", ") || "(none)"}. Extra: ${extra.join(", ") || "(none)"}`
     );
   }
   const exampleKeys = readEnvKeys(envExamplePath);

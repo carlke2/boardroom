@@ -7,8 +7,10 @@ import { setEnvForTests } from "../config/env.js";
 import { setRoleProfileLoaderForTests } from "../middleware/role.js";
 import { createAuthRouter, type AuthProvider } from "../routes/auth.routes.js";
 import { AuthProviderError } from "../services/auth/errors.js";
-import { loginWithPassword, registerAccount } from "../services/auth/supabaseAuth.js";
+import { loginWithPassword } from "../services/auth/supabaseAuth.js";
 import { testJwtAudience, testJwtIssuer, validEnv, validEnvWithLegacyJwt } from "./fixture.js";
+
+const samplePass = "x".repeat(12);
 
 async function listen(app: express.Express): Promise<{ base: string; close: () => Promise<void> }> {
   const server = app.listen(0, "127.0.0.1");
@@ -31,9 +33,6 @@ function provider(overrides: Partial<AuthProvider> = {}): AuthProvider {
         user: { id: "user-1", email: "a@b.c" },
       };
     },
-    async register() {
-      return { user: { id: "user-1", email: "a@b.c" }, tokens: null };
-    },
     async forgotPassword() {},
     async resetPassword() {},
     async refresh() {
@@ -53,7 +52,7 @@ function provider(overrides: Partial<AuthProvider> = {}): AuthProvider {
   };
 }
 
-test("login, register, and auth errors keep the ok response shape", async () => {
+test("login errors keep the ok response shape and register is disabled", async () => {
   const app = express();
   app.use(express.json());
   app.use(
@@ -71,18 +70,18 @@ test("login, register, and auth errors keep the ok response shape", async () => 
     const bad = await fetch(`${server.base}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "a@b.c", password: "secret" }),
+      body: JSON.stringify({ email: "a@b.c", password: samplePass }),
     });
     assert.equal(bad.status, 401);
     assert.deepEqual(await bad.json(), { ok: false, message: "Invalid email or password" });
 
-    const missing = await fetch(`${server.base}/auth/register`, {
+    const register = await fetch(`${server.base}/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "a@b.c" }),
+      body: JSON.stringify({ email: "a@b.c", password: samplePass }),
     });
-    assert.equal(missing.status, 400);
-    assert.deepEqual(await missing.json(), { ok: false, message: "email and password are required" });
+    assert.equal(register.status, 403);
+    assert.deepEqual(await register.json(), { ok: false, message: "Public signup is disabled", code: "signup_disabled" });
   } finally {
     await server.close();
   }
@@ -124,7 +123,7 @@ test("login returns tokens and me requires a verified bearer", async () => {
     const login = await fetch(`${server.base}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "a@b.c", password: "secret" }),
+      body: JSON.stringify({ email: "a@b.c", password: samplePass }),
     });
     const body = await login.json();
     assert.equal(body.ok, true);
@@ -173,55 +172,14 @@ test("password login calls Supabase Auth and does not send the service key", asy
     );
   }) as typeof fetch;
   try {
-    const tokens = await loginWithPassword("a@b.c", "secret");
+    const tokens = await loginWithPassword("a@b.c", samplePass);
     assert.equal(tokens.accessToken, "access");
     assert.equal(calls.length, 1);
     assert.match(calls[0].url, /\/auth\/v1\/token\?grant_type=password$/);
     assert.equal(calls[0].apikey, "test-anon-key");
     assert.equal(calls[0].authorization, "Bearer test-anon-key");
     assert.equal(calls[0].authorization.includes("test-service-key"), false);
-    assert.deepEqual(JSON.parse(calls[0].body), { email: "a@b.c", password: "secret" });
-  } finally {
-    globalThis.fetch = original;
-    setEnvForTests(undefined);
-  }
-});
-
-test("registration creates a confirmed account and then signs in", async () => {
-  setEnvForTests(validEnv());
-  const calls: { url: string; apikey: string; body: string }[] = [];
-  const original = globalThis.fetch;
-  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
-    const headers = new Headers(init?.headers);
-    const target = String(url);
-    calls.push({ url: target, apikey: headers.get("apikey") ?? "", body: String(init?.body ?? "") });
-    if (target.endsWith("/auth/v1/admin/users")) {
-      return new Response(JSON.stringify({ id: "user-1", email: "a@b.c" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    return new Response(
-      JSON.stringify({
-        access_token: "access",
-        refresh_token: "refresh",
-        expires_in: 3600,
-        token_type: "bearer",
-        user: { id: "user-1", email: "a@b.c" },
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
-  }) as typeof fetch;
-  try {
-    const created = await registerAccount({ email: "a@b.c", password: "secret", name: "Ada" });
-    assert.equal(created.user.id, "user-1");
-    assert.equal(created.tokens?.accessToken, "access");
-    assert.equal(calls.length, 2);
-    assert.match(calls[0].url, /\/auth\/v1\/admin\/users$/);
-    assert.equal(calls[0].apikey, "test-service-key");
-    assert.equal(JSON.parse(calls[0].body).email_confirm, true);
-    assert.match(calls[1].url, /\/auth\/v1\/token\?grant_type=password$/);
-    assert.equal(calls[1].apikey, "test-anon-key");
+    assert.deepEqual(JSON.parse(calls[0].body), { email: "a@b.c", password: samplePass });
   } finally {
     globalThis.fetch = original;
     setEnvForTests(undefined);

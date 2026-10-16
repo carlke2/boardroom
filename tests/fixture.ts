@@ -40,7 +40,7 @@ export const validEnvInput: Record<string, string> = {
   RESET_DEV_LINK: "false",
   MIN_PASSWORD_LENGTH: "8",
   SEED_ADMIN_EMAIL: "admin@example.com",
-  SEED_ADMIN_PASSWORD: "test-password",
+  SEED_ADMIN_PASSWORD: "",
   SEED_ADMIN_NAME: "System Admin",
   SEED_ADMIN_PHONE: "",
   ALLOW_PROD_SEED: "false",
