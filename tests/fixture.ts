@@ -1,8 +1,10 @@
 import { parseEnv, type Env } from "../config/env.js";
 
 export const validEnvInput: Record<string, string> = {
+  HOST: "0.0.0.0",
   PORT: "5000",
   NODE_ENV: "test",
+  TRUST_PROXY: "false",
   DATABASE_URL: "postgresql://user:pass@127.0.0.1:5432/postgres",
   PG_POOL_MAX: "5",
   PG_IDLE_TIMEOUT_MS: "1000",

@@ -30,7 +30,9 @@ test("parseEnv lists every missing name and no values", () => {
 
 test("parseEnv accepts the fixture and rejects a bad database url by name", () => {
   const env = parseEnv(validEnvInput);
+  assert.equal(env.HOST, "0.0.0.0");
   assert.equal(env.PORT, 5000);
+  assert.equal(env.TRUST_PROXY, "false");
   assert.equal(env.PG_SSL, "disable");
   assert.equal(env.JOIN_NOW_SMS, false);
   assert.throws(() => parseEnv({ ...validEnvInput, DATABASE_URL: "https://example.com" }), /DATABASE_URL/);

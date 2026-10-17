@@ -11,6 +11,7 @@
     "build": "npm run env:check && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test tests/*.test.ts",
+    "net:check": "tsx scripts/net-check.ts",
     "seed:admin": "tsx scripts/seedAdmin.ts",
     "seed:users": "tsx scripts/seedUsers.ts",
     "seed:data": "tsx scripts/seedData.ts",
@@ -42,6 +43,8 @@
     "p-queue": "^9.1.0",
     "pdfkit": "^0.17.2",
     "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0",
     "resend": "^6.9.2",
     "twilio": "^5.12.1",
     "zod": "^3.25.76"
@@ -54,6 +57,8 @@
     "@types/nodemailer": "^6.4.17",
     "@types/pdfkit": "^0.13.9",
     "@types/pg": "^8.23.1",
+    "@types/pino-http": "^5.8.4",
+    "pino-pretty": "^13.2.0",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   }

@@ -33,8 +33,17 @@ const flag = z.enum(["true", "false"]).transform((value) => value === "true");
 
 export const envObjectSchema = z
   .object({
+    HOST: text,
     PORT: int.positive().max(65535),
     NODE_ENV: z.enum(["development", "test", "production"]),
+    // false = off; true = trust one hop; or a non-negative hop count as a string.
+    TRUST_PROXY: z
+      .string()
+      .trim()
+      .refine(
+        (value) => value === "true" || value === "false" || /^\d+$/.test(value),
+        "TRUST_PROXY must be true, false, or a non-negative integer"
+      ),
     DATABASE_URL: text.refine(isPostgresUrl, "DATABASE_URL must be a postgres URL"),
     PG_POOL_MAX: int.positive().max(50),
     PG_IDLE_TIMEOUT_MS: int.positive(),
@@ -195,4 +204,12 @@ export function getEnv(): Env {
 /** Test hook. Production startup uses getEnv(), which reads backend/.env. */
 export function setEnvForTests(value: Env | undefined): void {
   cached = value;
+}
+
+/** Express `trust proxy` setting from TRUST_PROXY. Never hardcode hops. */
+export function trustProxySetting(env: Env = getEnv()): boolean | number {
+  const value = env.TRUST_PROXY;
+  if (value === "false") return false;
+  if (value === "true") return 1;
+  return Number.parseInt(value, 10);
 }

@@ -9,6 +9,8 @@ declare global {
       jwt?: JwtPayload | string;
       claims?: Record<string, unknown>;
       requestMeta?: RequestMeta;
+      requestId?: string;
+      id?: string;
     }
   }
 }

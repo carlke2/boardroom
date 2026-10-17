@@ -1,7 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
-import { getEnv } from "./config/env.js";
-import { pingPostgres } from "./db/postgres.js";
+import { getEnv, trustProxySetting } from "./config/env.js";
 import { requestMeta } from "./middleware/requestMeta.js";
 import { createAdminRouter } from "./routes/admin.routes.js";
 import { createAuthRouter, liveAuthProvider } from "./routes/auth.routes.js";
@@ -14,11 +13,16 @@ import { createRoomRouter } from "./routes/rooms.routes.js";
 import { createTicketRouter } from "./routes/tickets.routes.js";
 import { clientErrorMessage } from "./utils/errors.js";
 import { HttpError } from "./utils/httpError.js";
+import { attachRequestId, createLogger, createRequestLogger } from "./utils/logger.js";
 
 export function createApp(): express.Express {
   const env = getEnv();
   const app = express();
-  app.set("trust proxy", 1);
+  app.set("trust proxy", trustProxySetting(env));
+
+  const logger = createLogger(env.NODE_ENV);
+  app.use(createRequestLogger(logger));
+  app.use(attachRequestId());
 
   const origins = env.CORS_ORIGINS.split(",")
     .map((origin) => origin.trim())
@@ -27,6 +31,7 @@ export function createApp(): express.Express {
   app.use(
     cors({
       origin(origin, callback) {
+        // Native mobile clients often send no Origin; allow those.
         if (!origin || allowAnyOrigin || origins.includes(origin)) {
           callback(null, true);
           return;
@@ -37,7 +42,7 @@ export function createApp(): express.Express {
   );
   app.use(express.json({ limit: "8mb" }));
   app.use(requestMeta);
-  app.use(createHealthRouter(pingPostgres));
+  app.use(createHealthRouter());
   app.use("/auth", createAuthRouter(liveAuthProvider));
   app.use("/home", createHomeRouter());
   app.use("/admin", createAdminRouter());
@@ -47,7 +52,7 @@ export function createApp(): express.Express {
   app.use("/notifications", createNotificationRouter());
   app.use("/dashboard", createDashboardRouter());
 
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     const status =
       err instanceof HttpError
         ? err.status
@@ -57,7 +62,17 @@ export function createApp(): express.Express {
     if (status >= 500) console.error("Request failed");
     const code = err instanceof HttpError ? err.apiCode : status >= 500 ? "internal" : "validation";
     const details = err instanceof HttpError ? err.details : {};
-    res.status(status).json({ ok: false, message: clientErrorMessage(err, status, env.NODE_ENV), code, ...details });
+    const requestId = req.requestId || (req as Request & { id?: string }).id || "";
+    if (requestId && !res.getHeader("X-Request-Id")) {
+      res.setHeader("X-Request-Id", requestId);
+    }
+    res.status(status).json({
+      ok: false,
+      message: clientErrorMessage(err, status, env.NODE_ENV),
+      code,
+      requestId,
+      ...details,
+    });
   });
 
   return app;
